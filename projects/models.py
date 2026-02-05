@@ -2,6 +2,7 @@ import uuid
 
 from django.conf import settings  # Best practice to refer to User
 from django.db import models
+
 from skills.models import Skill
 
 # Create your models here.

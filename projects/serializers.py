@@ -1,7 +1,9 @@
-from rest_framework import serializers
 from django.db import transaction
-from .models import Project
+from rest_framework import serializers
+
 from skills.models import Skill, SkillCategory
+
+from .models import Project
 
 
 class TechStackSerializer(serializers.Serializer):
@@ -86,8 +88,12 @@ class ProjectSerializer(serializers.ModelSerializer):
                     skill_name = tech_stack.get("name").strip().lower()
                     category_name = tech_stack.get("category").strip().lower()
 
-                    category, _=SkillCategory.objects.get_or_create(user=user, name=category_name)
-                    skill, _ = Skill.objects.get_or_create(user=user, category=category, name=skill_name)
+                    category, _ = SkillCategory.objects.get_or_create(
+                        user=user, name=category_name
+                    )
+                    skill, _ = Skill.objects.get_or_create(
+                        user=user, category=category, name=skill_name
+                    )
                     skills.append(skill)
                 instance.tech_stack.set(skills)
         return instance

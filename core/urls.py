@@ -18,13 +18,24 @@ Including another URLconf
 from django.contrib import admin
 from django.urls import include, path
 
-from accounts import urls as accounts_urls
-from projects import urls as projects_urls
-from skills import urls as skills_urls
+# =============================================================================
+# API URL PATTERNS
+# =============================================================================
+# All API endpoints are grouped under /api/v1//906b574f-d6cf-4d9b-8bc7-954b4fa2248d/
+#
+# /api/v1/auth/...      - Authentication (signup, login, logout, social)
+# /api/v1/users/...     - User profiles and account management
+# /api/v1/projects/...  - Portfolio projects
+# /api/v1/skills/...    - Skills and skill categories
+# =============================================================================
+
+api_v1_patterns = [
+    path("", include("accounts.urls")),  # auth/ and users/
+    path("projects/", include("projects.urls")),
+    path("skills/", include("skills.urls")),
+]
 
 urlpatterns = [
     path("admin/", admin.site.urls),
-    path("api/v1/accounts/", include(accounts_urls)),
-    path("api/v1/projects/", include(projects_urls)),
-    path("api/v1/skills/", include(skills_urls)),
+    path("api/v1/", include(api_v1_patterns)),
 ]

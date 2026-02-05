@@ -10,7 +10,10 @@ For the full list of settings and their values, see
 https://docs.djangoproject.com/en/6.0/ref/settings/
 """
 
+from datetime import timedelta
 from pathlib import Path
+
+from django.conf import settings
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -33,14 +36,26 @@ ALLOWED_HOSTS = []
 INSTALLED_APPS = [
     "accounts",
     "projects",
-    "skills",
-    "rest_framework",
+    "skills",  # required by allauth
     "django.contrib.admin",
     "django.contrib.auth",
     "django.contrib.contenttypes",
     "django.contrib.sessions",
     "django.contrib.messages",
     "django.contrib.staticfiles",
+    "django.contrib.sites",
+    "rest_framework",
+    "rest_framework.authtoken",
+    "rest_framework_simplejwt",
+    "rest_framework_simplejwt.token_blacklist",
+    # Authentication
+    "allauth",
+    "allauth.account",
+    "allauth.socialaccount",
+    "allauth.socialaccount.providers.google",
+    "allauth.socialaccount.providers.github",  # Add other providers as needed
+    "dj_rest_auth",
+    "dj_rest_auth.registration",
 ]
 
 MIDDLEWARE = [
@@ -51,6 +66,7 @@ MIDDLEWARE = [
     "django.contrib.auth.middleware.AuthenticationMiddleware",
     "django.contrib.messages.middleware.MessageMiddleware",
     "django.middleware.clickjacking.XFrameOptionsMiddleware",
+    "allauth.account.middleware.AccountMiddleware",
 ]
 
 ROOT_URLCONF = "core.urls"
@@ -58,7 +74,7 @@ ROOT_URLCONF = "core.urls"
 TEMPLATES = [
     {
         "BACKEND": "django.template.backends.django.DjangoTemplates",
-        "DIRS": [],
+        "DIRS": ["templates"],
         "APP_DIRS": True,
         "OPTIONS": {
             "context_processors": [
@@ -78,14 +94,21 @@ WSGI_APPLICATION = "core.wsgi.application"
 
 DATABASES = {
     "default": {
-        "ENGINE": "django.db.backends.postgresql",
-        "NAME": "portfolio_db",
-        "USER": "dubsy",
-        "PASSWORD": "password",
-        "HOST": "localhost",  # Works for both Docker and Native
-        "PORT": "5432",
+        "ENGINE": "django.db.backends.sqlite3",
+        "NAME": BASE_DIR / "db.sqlite3",
     }
 }
+
+# DATABASES = {
+#     "default": {
+#         "ENGINE": "django.db.backends.postgresql",
+#         "NAME": "portfolio_db",
+#         "USER": "dubsy",
+#         "PASSWORD": "password",
+#         "HOST": "localhost",  # Works for both Docker and Native
+#         "PORT": "5432",
+#     }
+# }
 
 # Password validation
 # https://docs.djangoproject.com/en/6.0/ref/settings/#auth-password-validators
@@ -123,3 +146,130 @@ USE_TZ = True
 
 STATIC_URL = "static/"
 AUTH_USER_MODEL = "accounts.User"
+SITE_ID = 1
+
+REST_FRAMEWORK = {
+    "DEFAULT_AUTHENTICATION_CLASSES": (
+        "accounts.authentication.VersionedJWTAuthentication",
+        "dj_rest_auth.jwt_auth.JWTCookieAuthentication",
+    ),
+}
+
+AUTHENTICATION_BACKENDS = [
+    "django.contrib.auth.backends.ModelBackend",
+    "allauth.account.auth_backends.AuthenticationBackend",
+]
+
+REST_AUTH = {
+    "USE_JWT": True,
+    "JWT_AUTH_COOKIE": "access",
+    "JWT_AUTH_REFRESH_COOKIE": "refresh",
+    "JWT_AUTH_HTTPONLY": False,  # Set to True in production for security
+    "JWT_AUTH_RETURN_EXPIRATION": True,  # Include token expiration in response
+    "SESSION_LOGIN": False,  # Disable session-based login (pure token auth)
+    "USER_DETAILS_SERIALIZER": "accounts.serializers.AuthUserSerializer",  # Return user data on login
+}
+
+SIMPLE_JWT = {
+    "ACCESS_TOKEN_LIFETIME": timedelta(minutes=5),
+    "REFRESH_TOKEN_LIFETIME": timedelta(minutes=60),
+    "ROTATE_REFRESH_TOKENS": True,
+    "BLACKLIST_AFTER_ROTATION": True,
+    "UPDATE_LAST_LOGIN": False,
+    "ALGORITHM": "HS256",
+    "SIGNING_KEY": settings.SECRET_KEY,
+    "VERIFYING_KEY": "",
+    "AUDIENCE": None,
+    "ISSUER": None,
+    "JSON_ENCODER": None,
+    "JWK_URL": None,
+    "LEEWAY": 0,
+    "AUTH_HEADER_TYPES": ("Bearer",),
+    "AUTH_HEADER_NAME": "HTTP_AUTHORIZATION",
+    "USER_ID_FIELD": "id",
+    "USER_ID_CLAIM": "user_id",
+    "USER_AUTHENTICATION_RULE": "rest_framework_simplejwt.authentication.default_user_authentication_rule",
+    "ON_LOGIN_SUCCESS": "rest_framework_simplejwt.serializers.default_on_login_success",
+    "ON_LOGIN_FAILED": "rest_framework_simplejwt.serializers.default_on_login_failed",
+    "AUTH_TOKEN_CLASSES": ("rest_framework_simplejwt.tokens.AccessToken",),
+    "TOKEN_TYPE_CLAIM": "token_type",
+    "TOKEN_USER_CLASS": "rest_framework_simplejwt.models.TokenUser",
+    "JTI_CLAIM": "jti",
+    "SLIDING_TOKEN_REFRESH_EXP_CLAIM": "refresh_exp",
+    "SLIDING_TOKEN_LIFETIME": timedelta(minutes=5),
+    "SLIDING_TOKEN_REFRESH_LIFETIME": timedelta(days=1),
+    "TOKEN_OBTAIN_SERIALIZER": "accounts.serializers.CustomTokenObtainPairSerializer",
+    "TOKEN_REFRESH_SERIALIZER": "rest_framework_simplejwt.serializers.TokenRefreshSerializer",
+    "TOKEN_VERIFY_SERIALIZER": "rest_framework_simplejwt.serializers.TokenVerifySerializer",
+    "TOKEN_BLACKLIST_SERIALIZER": "rest_framework_simplejwt.serializers.TokenBlacklistSerializer",
+    "SLIDING_TOKEN_OBTAIN_SERIALIZER": "rest_framework_simplejwt.serializers.TokenObtainSlidingSerializer",
+    "SLIDING_TOKEN_REFRESH_SERIALIZER": "rest_framework_simplejwt.serializers.TokenRefreshSlidingSerializer",
+    "CHECK_REVOKE_TOKEN": False,
+    "REVOKE_TOKEN_CLAIM": "hash_password",
+    "CHECK_USER_IS_ACTIVE": True,
+}
+
+ACCOUNT_LOGIN_METHODS = {"email"}  # replaces ACCOUNT_AUTHENTICATION_METHOD
+ACCOUNT_SIGNUP_FIELDS = ["email*", "password1*", "password2*"]  #
+ACCOUNT_EMAIL_VERIFICATION = "mandatory"  # User CANNOT login until they click the link
+ACCOUNT_CONFIRM_EMAIL_ON_GET = True  # Verify directly when link is clicked
+ACCOUNT_USER_MODEL_USERNAME_FIELD = None
+
+
+# 6. Email Backend (CRITICAL FOR DEV)
+# Since you are on PC, this prints the email to your Terminal instead of sending it.
+# Switch to SMTP (Gmail/SendGrid) for production.
+EMAIL_BACKEND = "django.core.mail.backends.console.EmailBackend"
+# settings.py
+DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
+
+SOCIALACCOUNT_PROVIDERS = {
+    "google": {
+        "SCOPE": ["profile", "email"],
+        "AUTH_PARAMS": {"access_type": "online"},
+    },
+    "github": {
+        "SCOPE": ["read:user", "user:email"],
+    },
+}
+
+# =============================================================================
+# OAUTH CREDENTIALS
+# =============================================================================
+# These should be moved to environment variables in production!
+# For Google: https://console.cloud.google.com/apis/credentials
+# For GitHub: https://github.com/settings/developers
+
+GOOGLE_CLIENT_ID = (
+    "452791306166-h0ngbkmjhkk77e3hlmdpbdjbgp1pgp4q.apps.googleusercontent.com"
+)
+GOOGLE_CLIENT_SECRET = ""  # Add your Google client secret here
+
+GITHUB_CLIENT_ID = "Ov23li3qhgSGte2FwEYb"  # Add your GitHub client ID
+GITHUB_CLIENT_SECRET = ""  # Add your GitHub client secret
+
+# Callback URLs - These should match what's registered in OAuth provider consoles
+# For development, these point to your BACKEND callback endpoints
+# The backend will redirect to your frontend with the code
+GOOGLE_CALLBACK_URL = "http://localhost:8000/api/v1/auth/social/google/callback/"
+GITHUB_CALLBACK_URL = "http://localhost:8000/api/v1/auth/social/github/callback/"
+
+# Frontend URL - Where users are redirected after OAuth callback
+# FRONTEND_URL = "http://localhost:3000"
+
+# =============================================================================
+# SOCIAL ACCOUNT SETTINGS
+# =============================================================================
+SOCIALACCOUNT_EMAIL_AUTHENTICATION = True  # Allow login via email from social
+SOCIALACCOUNT_EMAIL_AUTHENTICATION_AUTO_CONNECT = (
+    True  # Auto-link social to existing email
+)
+SOCIALACCOUNT_EMAIL_REQUIRED = True  # Require email from social providers
+SOCIALACCOUNT_QUERY_EMAIL = True  # Query email from provider if not provided
+SOCIALACCOUNT_STORE_TOKENS = True  # Store provider tokens for API calls if needed
+
+# =============================================================================
+# CUSTOM ADAPTERS - Ensures username = email for social auth users
+# =============================================================================
+ACCOUNT_ADAPTER = "accounts.adapters.CustomAccountAdapter"
+SOCIALACCOUNT_ADAPTER = "accounts.adapters.CustomSocialAccountAdapter"

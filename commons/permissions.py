@@ -1,4 +1,20 @@
-from rest_framework.permissions import BasePermission, SAFE_METHODS
+from django.contrib.auth import get_user_model
+from rest_framework.permissions import SAFE_METHODS, BasePermission
+
+User = get_user_model()
+
+
+class IsSelf(BasePermission):
+    """
+    Only allow users to access their own user object.
+    Superusers cannot bypass this.
+    """
+
+    def has_object_permission(self, request, view, obj):
+        if isinstance(obj, User):
+            return obj == request.user  # only self
+        # fallback for related models
+        return getattr(obj, "user", None) == request.user
 
 
 class IsAuthenticatedAndOwner(BasePermission):

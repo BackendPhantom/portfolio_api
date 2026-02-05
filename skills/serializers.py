@@ -8,9 +8,13 @@ class SkillCategorySerializer(serializers.ModelSerializer):
         model = SkillCategory
         fields = ("name",)
 
+
 class SkillSerializer(serializers.ModelSerializer):
     category = serializers.CharField(source="category.name")
 
     class Meta:
         model = Skill
-        fields = ("name", "category", )
+        fields = (
+            "name",
+            "category",
+        )

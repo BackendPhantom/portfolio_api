@@ -1,67 +1,352 @@
-from django.conf import settings
+import re
+
 from django.contrib.auth import get_user_model
+from django.contrib.auth.password_validation import validate_password
+from django.core.exceptions import ValidationError as DjangoValidationError
+from django.db import transaction
 from rest_framework import serializers
+from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 
 User = get_user_model()
 
 
-class UserSerializer(serializers.ModelSerializer):
+class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
+    @classmethod
+    def get_token(cls, user):
+        token = super().get_token(user)
+        token["token_version"] = user.token_version
+        return token
+
+
+# =============================================================================
+# AUTH SERIALIZERS (Used by dj_rest_auth)
+# =============================================================================
+
+
+class AuthUserSerializer(serializers.ModelSerializer):
+    """
+    Lightweight serializer for authentication responses.
+    Used by dj_rest_auth to return user data with JWT tokens.
+    """
+
+    full_name = serializers.CharField(read_only=True)
+    has_complete_profile = serializers.BooleanField(read_only=True)
+
     class Meta:
         model = User
         fields = (
             "id",
-            "username",
+            "email",
+            "first_name",
+            "last_name",
+            "full_name",
+            "avatar",
+            "title",
+            "has_complete_profile",
+        )
+        read_only_fields = fields
+
+
+# =============================================================================
+# REGISTRATION SERIALIZER
+# =============================================================================
+
+
+class UserRegistrationSerializer(serializers.ModelSerializer):
+    """
+    Serializer for user registration.
+    Handles email/password signup with strong validation.
+    """
+
+    password = serializers.CharField(
+        write_only=True,
+        min_length=8,
+        style={"input_type": "password"},
+        help_text="Min 8 chars, must include uppercase, lowercase, digit, and special char.",
+    )
+    password_confirm = serializers.CharField(
+        write_only=True,
+        style={"input_type": "password"},
+        help_text="Confirm your password.",
+    )
+
+    class Meta:
+        model = User
+        fields = (
             "email",
             "password",
-            "bio",
-            "github_url",
-            "linkedin_url",
+            "password_confirm",
+            "first_name",
+            "last_name",
         )
-        read_only_fields = (
-            "id",
-            "username",
-        )  # Email and username are set during registration and should not be changed via this serializer
-        extra_kwargs = {"password": {"write_only": True}}
 
     def validate_email(self, value):
-        if User.objects.filter(email=value).exists():
-            raise serializers.ValidationError("A user with that email already exists.")
+        """Ensure email is unique and properly formatted."""
+        email = value.lower().strip()
+        if User.objects.filter(email__iexact=email).exists():
+            raise serializers.ValidationError("A user with this email already exists.")
+        return email
+
+    def validate_password(self, value):
+        """Strong password validation."""
+        errors = []
+
+        if len(value) < 8:
+            errors.append("Password must be at least 8 characters long.")
+        if not re.search(r"[A-Z]", value):
+            errors.append("Password must contain at least one uppercase letter.")
+        if not re.search(r"[a-z]", value):
+            errors.append("Password must contain at least one lowercase letter.")
+        if not re.search(r"\d", value):
+            errors.append("Password must contain at least one digit.")
+        if not re.search(r"[!@#$%^&*(),.?\":{}|<>]", value):
+            errors.append("Password must contain at least one special character.")
+
+        # Also run Django's built-in validators
+        try:
+            validate_password(value)
+        except DjangoValidationError as e:
+            errors.extend(e.messages)
+
+        if errors:
+            raise serializers.ValidationError(errors)
+
         return value
 
     def validate(self, attrs):
-        password = attrs.get("password")
-        if password:
-            if len(password) < 8:
-                raise serializers.ValidationError(
-                    "Password must be at least 8 characters long."
-                )
-            if not any(char.isdigit() for char in password):
-                raise serializers.ValidationError(
-                    "Password must contain at least one digit."
-                )
-            if not any(char.isupper() for char in password):
-                raise serializers.ValidationError(
-                    "Password must contain at least one uppercase letter."
-                )
-            if not any(char.islower() for char in password):
-                raise serializers.ValidationError(
-                    "Password must contain at least one lowercase letter."
-                )
-            if not any(
-                char in ["!", "@", "#", "$", "%", "^", "&", "*"] for char in password
-            ):
-                raise serializers.ValidationError(
-                    "Password must contain at least one special character."
-                )
-
-        return super().validate(attrs)
+        """Ensure passwords match."""
+        if attrs.get("password") != attrs.get("password_confirm"):
+            raise serializers.ValidationError(
+                {"password_confirm": "Passwords do not match."}
+            )
+        return attrs
 
     def create(self, validated_data):
-        password = validated_data.pop("password", None)
-        validated_data["username"] = validated_data["email"]
+        """Create user with hashed password."""
+        validated_data.pop("password_confirm")
+        password = validated_data.pop("password")
 
-        instance = self.Meta.model(**validated_data)
-        if password is not None:
-            instance.set_password(password)
-        instance.save()
-        return instance
+        with transaction.atomic():
+            user = User(
+                email=validated_data["email"],
+                username=validated_data["email"],  # Set username = email
+                first_name=validated_data.get("first_name", ""),
+                last_name=validated_data.get("last_name", ""),
+            )
+            user.set_password(password)
+            user.save()
+
+        return user
+
+
+# =============================================================================
+# PROFILE SERIALIZERS
+# =============================================================================
+
+
+class UserProfileSerializer(serializers.ModelSerializer):
+    """
+    Full profile serializer for authenticated users viewing/editing their own profile.
+    """
+
+    full_name = serializers.CharField(read_only=True)
+    has_complete_profile = serializers.BooleanField(read_only=True)
+    email = serializers.EmailField(read_only=True)  # Email cannot be changed here
+
+    class Meta:
+        model = User
+        fields = (
+            "id",
+            "email",
+            "first_name",
+            "last_name",
+            "full_name",
+            "avatar",
+            "title",
+            "bio",
+            "location",
+            "website",
+            "github_url",
+            "linkedin_url",
+            "twitter_url",
+            "years_of_experience",
+            "is_available_for_hire",
+            "is_open_to_freelance",
+            "is_profile_public",
+            "has_complete_profile",
+            "created_at",
+            "updated_at",
+        )
+        read_only_fields = ("id", "email", "created_at", "updated_at")
+
+    def validate_website(self, value):
+        """Validate website URL format."""
+        if value and not value.startswith(("http://", "https://")):
+            value = f"https://{value}"
+        return value
+
+    def validate_github_url(self, value):
+        """Validate GitHub URL."""
+        if value and "github.com" not in value.lower():
+            raise serializers.ValidationError("Please enter a valid GitHub URL.")
+        return value
+
+    def validate_linkedin_url(self, value):
+        """Validate LinkedIn URL."""
+        if value and "linkedin.com" not in value.lower():
+            raise serializers.ValidationError("Please enter a valid LinkedIn URL.")
+        return value
+
+
+class PublicUserProfileSerializer(serializers.ModelSerializer):
+    """
+    Public profile serializer - limited fields for viewing other users' profiles.
+    Only shows information the user has made public.
+    """
+
+    full_name = serializers.CharField(read_only=True)
+
+    class Meta:
+        model = User
+        fields = (
+            "id",
+            "full_name",
+            "avatar",
+            "title",
+            "bio",
+            "location",
+            "website",
+            "github_url",
+            "linkedin_url",
+            "twitter_url",
+            "years_of_experience",
+            "is_available_for_hire",
+            "is_open_to_freelance",
+        )
+
+
+# =============================================================================
+# PASSWORD CHANGE SERIALIZER
+# =============================================================================
+
+
+class ChangePasswordSerializer(serializers.Serializer):
+    """Serializer for password change endpoint."""
+
+    current_password = serializers.CharField(
+        write_only=True, style={"input_type": "password"}
+    )
+    new_password = serializers.CharField(
+        write_only=True, min_length=8, style={"input_type": "password"}
+    )
+    new_password_confirm = serializers.CharField(
+        write_only=True, style={"input_type": "password"}
+    )
+
+    def validate_current_password(self, value):
+        """Verify current password is correct."""
+        user = self.context["request"].user
+        if not user.check_password(value):
+            raise serializers.ValidationError("Current password is incorrect.")
+        return value
+
+    def validate_new_password(self, value):
+        """Apply same strong password rules."""
+        errors = []
+
+        if len(value) < 8:
+            errors.append("Password must be at least 8 characters long.")
+        if not re.search(r"[A-Z]", value):
+            errors.append("Password must contain at least one uppercase letter.")
+        if not re.search(r"[a-z]", value):
+            errors.append("Password must contain at least one lowercase letter.")
+        if not re.search(r"\d", value):
+            errors.append("Password must contain at least one digit.")
+        if not re.search(r"[!@#$%^&*(),.?\":{}|<>]", value):
+            errors.append("Password must contain at least one special character.")
+
+        if errors:
+            raise serializers.ValidationError(errors)
+
+        return value
+
+    def validate(self, attrs):
+        """Ensure new passwords match and differ from current."""
+        if attrs["new_password"] != attrs["new_password_confirm"]:
+            raise serializers.ValidationError(
+                {"new_password_confirm": "New passwords do not match."}
+            )
+
+        if attrs["current_password"] == attrs["new_password"]:
+            raise serializers.ValidationError(
+                {
+                    "new_password": "New password must be different from current password."
+                }
+            )
+
+        return attrs
+
+    def save(self):
+        """Update user's password."""
+        user = self.context["request"].user
+        user.set_password(self.validated_data["new_password"])
+        user.save()
+        return user
+
+
+# =============================================================================
+# PASSWORD RESET SERIALIZERS
+# =============================================================================
+
+
+class PasswordResetRequestSerializer(serializers.Serializer):
+    """Serializer for requesting a password reset email."""
+
+    email = serializers.EmailField()
+
+    def validate_email(self, value):
+        """Check if user with this email exists."""
+        email = value.lower().strip()
+        # We don't reveal if user exists for security
+        return email
+
+
+class PasswordResetConfirmSerializer(serializers.Serializer):
+    """Serializer for confirming password reset with token."""
+
+    token = serializers.CharField(write_only=True)
+    uid = serializers.CharField(write_only=True)
+    new_password = serializers.CharField(
+        write_only=True, min_length=8, style={"input_type": "password"}
+    )
+    new_password_confirm = serializers.CharField(
+        write_only=True, style={"input_type": "password"}
+    )
+
+    def validate_new_password(self, value):
+        """Apply same strong password rules."""
+        errors = []
+
+        if len(value) < 8:
+            errors.append("Password must be at least 8 characters long.")
+        if not re.search(r"[A-Z]", value):
+            errors.append("Password must contain at least one uppercase letter.")
+        if not re.search(r"[a-z]", value):
+            errors.append("Password must contain at least one lowercase letter.")
+        if not re.search(r"\d", value):
+            errors.append("Password must contain at least one digit.")
+        if not re.search(r'[!@#$%^&*(),.?":{}|<>]', value):
+            errors.append("Password must contain at least one special character.")
+
+        if errors:
+            raise serializers.ValidationError(errors)
+
+        return value
+
+    def validate(self, attrs):
+        """Ensure new passwords match."""
+        if attrs["new_password"] != attrs["new_password_confirm"]:
+            raise serializers.ValidationError(
+                {"new_password_confirm": "Passwords do not match."}
+            )
+        return attrs
