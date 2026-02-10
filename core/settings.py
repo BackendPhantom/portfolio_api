@@ -44,10 +44,11 @@ INSTALLED_APPS = [
     "django.contrib.messages",
     "django.contrib.staticfiles",
     "django.contrib.sites",
+    "drf_spectacular",
+    "drf_spectacular_sidecar",
     "rest_framework",
     "rest_framework.authtoken",
     "rest_framework_simplejwt",
-    "rest_framework_simplejwt.token_blacklist",
     # Authentication
     "allauth",
     "allauth.account",
@@ -56,10 +57,15 @@ INSTALLED_APPS = [
     "allauth.socialaccount.providers.github",  # Add other providers as needed
     "dj_rest_auth",
     "dj_rest_auth.registration",
+    "debug_toolbar",
+    "django_filters",
 ]
 
 MIDDLEWARE = [
     "django.middleware.security.SecurityMiddleware",
+    "django.middleware.gzip.GZipMiddleware",
+    "debug_toolbar.middleware.DebugToolbarMiddleware",
+    # "django_brotli.middleware.BrotliMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "django.middleware.csrf.CsrfViewMiddleware",
@@ -153,6 +159,12 @@ REST_FRAMEWORK = {
         "accounts.authentication.VersionedJWTAuthentication",
         "dj_rest_auth.jwt_auth.JWTCookieAuthentication",
     ),
+    "DEFAULT_FILTER_BACKENDS": [
+        "django_filters.rest_framework.DjangoFilterBackend",
+        "rest_framework.filters.SearchFilter",
+        "rest_framework.filters.OrderingFilter",
+    ],
+    "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
 }
 
 AUTHENTICATION_BACKENDS = [
@@ -174,7 +186,7 @@ SIMPLE_JWT = {
     "ACCESS_TOKEN_LIFETIME": timedelta(minutes=5),
     "REFRESH_TOKEN_LIFETIME": timedelta(minutes=60),
     "ROTATE_REFRESH_TOKENS": True,
-    "BLACKLIST_AFTER_ROTATION": True,
+    "BLACKLIST_AFTER_ROTATION": False,
     "UPDATE_LAST_LOGIN": False,
     "ALGORITHM": "HS256",
     "SIGNING_KEY": settings.SECRET_KEY,
@@ -273,3 +285,164 @@ SOCIALACCOUNT_STORE_TOKENS = True  # Store provider tokens for API calls if need
 # =============================================================================
 ACCOUNT_ADAPTER = "accounts.adapters.CustomAccountAdapter"
 SOCIALACCOUNT_ADAPTER = "accounts.adapters.CustomSocialAccountAdapter"
+
+
+CELERY_BROKER_URL = "redis://localhost:6379/0"
+CELERY_RESULT_BACKEND = "redis://localhost:6379/0"
+CELERY_ACCEPT_CONTENT = ["json"]
+CELERY_TASK_SERIALIZER = "json"
+CELERY_RESULT_SERIALIZER = "json"
+CELERY_TIMEZONE = "UTC"
+
+# Optional: Task execution settings
+CELERY_TASK_ACKS_LATE = True  # Acknowledge after task completes
+CELERY_TASK_REJECT_ON_WORKER_LOST = True  # Re-queue if worker dies
+CELERY_TASK_TIME_LIMIT = 300  # 5 minute timeout
+
+
+CACHES = {
+    "default": {
+        "BACKEND": "django_redis.cache.RedisCache",
+        "LOCATION": "redis://127.0.0.1:6379/1",  # Use different DB than Celery
+        "OPTIONS": {
+            "CLIENT_CLASS": "django_redis.client.DefaultClient",
+            "SOCKET_CONNECT_TIMEOUT": 5,
+            "SOCKET_TIMEOUT": 5,
+            "CONNECTION_POOL_KWARGS": {"max_connections": 50},
+            "COMPRESSOR": "django_redis.compressors.zlib.ZlibCompressor",
+        },
+        "KEY_PREFIX": "portfolio",  # Prefix all keys to avoid collisions
+        "TIMEOUT": 300,  # Default timeout: 5 minutes
+    }
+}
+
+
+SPECTACULAR_SETTINGS = {
+    "TITLE": "Developer Portfolio API",
+    "DESCRIPTION": """
+## Overview
+A robust Django REST Framework backend designed to power a Developer Portfolio application.
+This system manages user authentication, project showcases, and technical skill tracking
+with a focus on security and data integrity.
+
+## Features
+- **JWT Authentication** - Secure token-based auth with HTTP-only cookie support
+- **Social OAuth** - Login via Google and GitHub
+- **Project Management** - Full CRUD operations for portfolio projects with tech stack tracking
+- **Skills Tracking** - Categorized technical skills management
+- **Email Verification** - Mandatory email verification for new accounts
+- **Async Tasks** - Background email sending via Celery
+
+## Authentication
+Most endpoints require JWT authentication. Include the token in your requests:
+
+```
+Authorization: Bearer <access_token>
+```
+
+Or use the `access` cookie if JWT cookies are enabled.
+
+## Token Lifecycle
+- **Access Token**: Valid for 5 minutes
+- **Refresh Token**: Valid for 60 minutes
+- Tokens are rotated on refresh for enhanced security
+    """,
+    "VERSION": "1.0.0",
+    "SERVE_INCLUDE_SCHEMA": False,
+    "SWAGGER_UI_DIST": "SIDECAR",
+    "SWAGGER_UI_FAVICON_HREF": "SIDECAR",
+    "REDOC_DIST": "SIDECAR",
+    # Split request body into separate components for clarity
+    "COMPONENT_SPLIT_REQUEST": True,
+    # Sort operations alphabetically within tags
+    "SORT_OPERATIONS": True,
+    # Define tag order and descriptions
+    "TAGS": [
+        {
+            "name": "Authentication",
+            "description": "User registration, login, logout, and email verification",
+        },
+        {
+            "name": "Password Management",
+            "description": "Password reset and change operations",
+        },
+        {
+            "name": "User Profile",
+            "description": "User profile retrieval and management",
+        },
+        {
+            "name": "Social Authentication",
+            "description": "OAuth login via Google and GitHub providers",
+        },
+        {
+            "name": "Projects",
+            "description": "Portfolio project management - create, read, update, delete projects",
+        },
+        {
+            "name": "Skills",
+            "description": "Technical skills and skill categories management",
+        },
+        {
+            "name": "Skill Categories",
+            "description": "Skill category organization (Frontend, Backend, DevOps, etc.)",
+        },
+    ],
+    # External documentation link
+    "EXTERNAL_DOCS": {
+        "description": "GitHub Repository",
+        "url": "https://github.com/BackendPhantom/portfolio_api",
+    },
+    # Contact information
+    "CONTACT": {
+        "name": "API Support",
+        "url": "https://github.com/BackendPhantom/portfolio_api/issues",
+    },
+    # License information
+    "LICENSE": {
+        "name": "MIT License",
+        "url": "https://opensource.org/licenses/MIT",
+    },
+    # Swagger UI settings
+    "SWAGGER_UI_SETTINGS": {
+        "deepLinking": True,
+        "persistAuthorization": True,
+        "displayOperationId": False,
+        "filter": True,
+    },
+    # Security schemes
+    "SECURITY": [{"Bearer": []}],
+    "APPEND_COMPONENTS": {
+        "securitySchemes": {
+            "Bearer": {
+                "type": "http",
+                "scheme": "bearer",
+                "bearerFormat": "JWT",
+                "description": "JWT access token obtained from /api/v1/auth/login/",
+            },
+            "Cookie": {
+                "type": "apiKey",
+                "in": "cookie",
+                "name": "access",
+                "description": "JWT access token stored in HTTP-only cookie",
+            },
+        }
+    },
+}
+
+# LOGGING = {
+#     'version': 1,
+#     'handlers': {
+#         'console': {
+#             'class': 'logging.StreamHandler',
+#         },
+#     },
+#     'loggers': {
+#         'django.db.backends': {
+#             'level': 'DEBUG',
+#             'handlers': ['console'],
+#         },
+#     },
+# }
+
+
+# Time a login request

@@ -11,7 +11,7 @@ class User(AbstractUser):
     """
 
     id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
-    email = models.EmailField(unique=True)
+    email = models.EmailField(unique=True, db_index=True)
     token_version = models.PositiveIntegerField(default=0)
 
     # -------------------------------------------------------------------------
@@ -26,6 +26,7 @@ class User(AbstractUser):
         max_length=100,
         blank=True,
         help_text="Professional title, e.g., 'Full Stack Developer'",
+        db_index=True,
     )
     bio = models.TextField(blank=True, help_text="Short biography or about section")
     location = models.CharField(
@@ -47,10 +48,10 @@ class User(AbstractUser):
         null=True, blank=True, help_text="Years of professional experience"
     )
     is_available_for_hire = models.BooleanField(
-        default=False, help_text="Open to job opportunities"
+        default=False, help_text="Open to job opportunities", db_index=True
     )
     is_open_to_freelance = models.BooleanField(
-        default=False, help_text="Available for freelance work"
+        default=False, help_text="Available for freelance work", db_index=True
     )
 
     # -------------------------------------------------------------------------
@@ -60,13 +61,13 @@ class User(AbstractUser):
         default=False, help_text="Whether email has been verified"
     )
     is_profile_public = models.BooleanField(
-        default=True, help_text="Whether profile is visible to public"
+        default=True, help_text="Whether profile is visible to public", db_index=True
     )
 
     # -------------------------------------------------------------------------
     # Timestamps
     # -------------------------------------------------------------------------
-    created_at = models.DateTimeField(auto_now_add=True)
+    created_at = models.DateTimeField(auto_now_add=True, db_index=True)
     updated_at = models.DateTimeField(auto_now=True)
 
     USERNAME_FIELD = "email"
@@ -76,6 +77,12 @@ class User(AbstractUser):
         ordering = ["-created_at"]
         verbose_name = "User"
         verbose_name_plural = "Users"
+        indexes = [
+            models.Index(fields=["email"]),
+            models.Index(fields=["title", "is_available_for_hire"]),
+            models.Index(fields=["title", "is_open_to_freelance"]),
+            models.Index(fields=["title", "is_profile_public"]),
+        ]
 
     def __str__(self):
         return self.email

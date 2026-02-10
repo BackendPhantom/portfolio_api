@@ -14,6 +14,9 @@ class SkillCategory(models.Model):
     class Meta:
         verbose_name_plural = "Skill Categories"
         unique_together = ("user", "name")
+        indexes = [
+            models.Index(fields=["user", "name"]),
+        ]
 
     def __str__(self):
         return self.name
@@ -30,6 +33,11 @@ class Skill(models.Model):
 
     class Meta:
         unique_together = ("user", "category", "name")
+        indexes = [
+            # Composite index for common query: user's skills by category
+            models.Index(fields=["user", "category"]),
+            models.Index(fields=["user", "name"]),
+        ]
 
     def __str__(self):
         return self.name

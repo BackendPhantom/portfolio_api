@@ -35,6 +35,12 @@ class Project(models.Model):
 
     class Meta:
         ordering = ["-created_at"]  # Newest projects first
+        indexes = [
+            # Composite index: Get user's projects ordered by date
+            models.Index(fields=["user", "-created_at"]),
+            # For title search
+            models.Index(fields=["title"]),
+        ]
 
     def __str__(self):
         return self.title
