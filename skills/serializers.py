@@ -6,7 +6,10 @@ from .models import Skill, SkillCategory
 class SkillCategorySerializer(serializers.ModelSerializer):
     class Meta:
         model = SkillCategory
-        fields = ("name",)
+        fields = (
+            "id",
+            "name",
+        )
 
 
 class SkillSerializer(serializers.ModelSerializer):
@@ -15,6 +18,7 @@ class SkillSerializer(serializers.ModelSerializer):
     class Meta:
         model = Skill
         fields = (
+            "id",
             "name",
             "category",
         )

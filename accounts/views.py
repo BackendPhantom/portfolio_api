@@ -1,3 +1,8 @@
+import logging
+import secrets
+import uuid
+from urllib.parse import urlencode
+
 import requests
 from allauth.socialaccount.providers.github.views import GitHubOAuth2Adapter
 from allauth.socialaccount.providers.google.views import GoogleOAuth2Adapter
@@ -6,8 +11,19 @@ from dj_rest_auth.registration.views import SocialLoginView
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.contrib.auth.tokens import default_token_generator
+from django.core.cache import cache
+from django.http import HttpResponseRedirect
+from django.utils import timezone
 from django.utils.encoding import force_bytes, force_str
 from django.utils.http import urlsafe_base64_decode, urlsafe_base64_encode
+from drf_spectacular.utils import (
+    OpenApiParameter,
+    OpenApiResponse,
+    extend_schema,
+    extend_schema_view,
+    inline_serializer,
+)
+from rest_framework import serializers as drf_serializers
 from rest_framework import status, viewsets
 from rest_framework.decorators import action, api_view, permission_classes
 from rest_framework.exceptions import MethodNotAllowed, NotFound
@@ -15,17 +31,11 @@ from rest_framework.generics import GenericAPIView
 from rest_framework.permissions import AllowAny, IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
-from rest_framework_simplejwt.tokens import RefreshToken
-from drf_spectacular.utils import (
-    extend_schema,
-    extend_schema_view,
-    OpenApiResponse,
-    OpenApiParameter,
-    inline_serializer,
-)
-from rest_framework import serializers as drf_serializers
+from rest_framework_simplejwt.exceptions import TokenError
+
 from commons.permissions import IsSelf
 
+from .models import APIKey
 from .serializers import (
     AuthUserSerializer,
     ChangePasswordSerializer,
@@ -35,8 +45,16 @@ from .serializers import (
     UserProfileSerializer,
     UserRegistrationSerializer,
 )
-from .tasks import send_verification_email, send_password_reset_email
+from .tasks import send_password_reset_email, send_verification_email
+from .throttles import (
+    LoginRateThrottle,
+    PasswordResetRateThrottle,
+    SignupRateThrottle,
+    SocialExchangeRateThrottle,
+)
+from .tokens import VersionedRefreshToken, get_tokens_for_user
 
+logger = logging.getLogger(__name__)
 User = get_user_model()
 
 
@@ -72,6 +90,7 @@ class SignupViewset(GenericAPIView):
     """
 
     permission_classes = [AllowAny]
+    throttle_classes = [SignupRateThrottle]
     serializer_class = UserRegistrationSerializer
 
     def post(self, request):
@@ -154,6 +173,7 @@ class LoginView(APIView):
     """
 
     permission_classes = [AllowAny]
+    throttle_classes = [LoginRateThrottle]
 
     def post(self, request):
         email = request.data.get("email", "").lower().strip()
@@ -185,20 +205,15 @@ class LoginView(APIView):
                 status=status.HTTP_401_UNAUTHORIZED,
             )
 
-        # Generate JWT tokens
-        refresh = RefreshToken.for_user(user)
+        # Generate JWT tokens via the single centralized path
+        tokens = get_tokens_for_user(user)
 
-        refresh["token_version"] = user.token_version
-        refresh.access_token["token_version"] = user.token_version
+        response_data = {
+            **tokens,
+            "user": AuthUserSerializer(user).data,
+        }
 
-        return Response(
-            {
-                "access": str(refresh.access_token),
-                "refresh": str(refresh),
-                "user": AuthUserSerializer(user).data,
-            },
-            status=status.HTTP_200_OK,
-        )
+        return Response(response_data, status=status.HTTP_200_OK)
 
 
 @extend_schema(
@@ -226,12 +241,142 @@ class LogoutView(APIView):
     def post(self, request):
         user = request.user
         user.token_version += 1
-        user.save(update_fields=["token_version"])
+        user.refresh_jti = ""  # Invalidate the current refresh token
+        user.save(update_fields=["token_version", "refresh_jti"])
+
+        # Optionally blacklist the refresh token if provided
+        refresh_token = request.data.get("refresh")
+        if refresh_token:
+            try:
+                from rest_framework_simplejwt.tokens import RefreshToken
+
+                token = RefreshToken(refresh_token)
+                token.blacklist()
+            except (TokenError, Exception):
+                pass  # Token already blacklisted or invalid — still log out
+
+        # Note: API keys are NOT revoked on logout — they are long-lived
+        # and managed separately via /api/v1/auth/api-keys/.
 
         return Response(
-            {"message": "Logged out from all devices"},
+            {"message": "Logged out successfully."},
             status=200,
         )
+
+
+@extend_schema(
+    tags=["Authentication"],
+    summary="Refresh Access Token",
+    description=(
+        "Exchange a valid refresh token for a new access/refresh token pair. "
+        "The refresh token must carry a valid `token_version` claim matching "
+        "the user's current version, otherwise it is rejected. This prevents "
+        "revoked refresh tokens (post-logout / password-change) from minting "
+        "new access tokens."
+    ),
+    request=inline_serializer(
+        name="TokenRefreshRequest",
+        fields={
+            "refresh": drf_serializers.CharField(help_text="Refresh token"),
+        },
+    ),
+    responses={
+        200: inline_serializer(
+            name="TokenRefreshResponse",
+            fields={
+                "access": drf_serializers.CharField(help_text="New JWT access token"),
+                "refresh": drf_serializers.CharField(help_text="New JWT refresh token"),
+            },
+        ),
+        401: OpenApiResponse(description="Token is invalid or revoked"),
+    },
+)
+class VersionedTokenRefreshView(APIView):
+    """
+    Custom refresh view that validates both `token_version` and the
+    refresh token's JTI against the value stored on the User model.
+
+    This makes every refresh token single-use without a blacklist table:
+    - On issuance, the refresh JTI hash is saved to `user.refresh_jti`.
+    - On refresh, we verify the incoming JTI matches the stored hash.
+    - `get_tokens_for_user` then overwrites the hash with the new JTI,
+      so the old token can never be replayed.
+    """
+
+    permission_classes = [AllowAny]
+
+    def post(self, request):
+        raw_refresh = request.data.get("refresh")
+        if not raw_refresh:
+            return Response(
+                {"error": "Refresh token is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            refresh = VersionedRefreshToken(raw_refresh)
+        except TokenError:
+            return Response(
+                {"error": "Token is invalid or expired."},
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
+
+        # Extract claims
+        token_version = refresh.get("token_version")
+        user_id = refresh.get(settings.SIMPLE_JWT.get("USER_ID_CLAIM", "user_id"))
+        jti = refresh.get("jti")
+
+        if token_version is None or user_id is None or jti is None:
+            return Response(
+                {"error": "Malformed token."},
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
+
+        try:
+            user = User.objects.get(pk=user_id)
+        except User.DoesNotExist:
+            return Response(
+                {"error": "User not found."},
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
+
+        # 1. Validate token_version (catches post-logout / password-change)
+        if token_version != user.token_version:
+            logger.info(
+                "Revoked refresh token used for user %s (token v%s != current v%s)",
+                user.pk,
+                token_version,
+                user.token_version,
+            )
+            return Response(
+                {"error": "Token has been revoked."},
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
+
+        # 2. Validate JTI (ensures single-use without a blacklist table)
+        from .tokens import _hash_jti
+
+        if not user.refresh_jti or _hash_jti(jti) != user.refresh_jti:
+            logger.warning(
+                "Refresh token replay attempt for user %s (jti mismatch)",
+                user.pk,
+            )
+            # A JTI mismatch after version check passes means the token
+            # was already rotated — possible token theft.  Revoke the
+            # entire family by bumping token_version.
+            user.token_version += 1
+            user.refresh_jti = ""
+            user.save(update_fields=["token_version", "refresh_jti"])
+            return Response(
+                {
+                    "error": "Token has already been used. All sessions revoked for security."
+                },
+                status=status.HTTP_401_UNAUTHORIZED,
+            )
+
+        # Issue a fresh pair — this overwrites refresh_jti on the user
+        tokens = get_tokens_for_user(user)
+        return Response(tokens, status=status.HTTP_200_OK)
 
 
 # =============================================================================
@@ -324,6 +469,49 @@ class UserProfileViewset(viewsets.ModelViewSet):
 
     def create(self, request, *args, **kwargs):
         raise MethodNotAllowed(request.method)
+
+    @extend_schema(
+        tags=["User Profile"],
+        summary="Get Current User Profile",
+        description="Retrieve the authenticated user's own profile.",
+        responses={200: UserProfileSerializer},
+    )
+    @action(
+        detail=False,
+        methods=["GET"],
+        permission_classes=[IsAuthenticated],
+        url_path="me",
+    )
+    def me(self, request):
+        """Get the currently authenticated user's profile. GET /api/v1/users/me/"""
+        serializer = UserProfileSerializer(request.user)
+        return Response(serializer.data)
+
+    @extend_schema(
+        tags=["User Profile"],
+        summary="Update Current User Profile",
+        description="Update the authenticated user's profile (partial update).",
+        request=UserProfileSerializer,
+        responses={
+            200: UserProfileSerializer,
+            400: OpenApiResponse(description="Validation error"),
+        },
+    )
+    @action(
+        detail=False,
+        methods=["PATCH", "PUT"],
+        permission_classes=[IsAuthenticated],
+        url_path="update-profile",
+    )
+    def update_profile(self, request):
+        """Update the currently authenticated user's profile. PATCH /api/v1/users/update-profile/"""
+        partial = request.method == "PATCH"
+        serializer = UserProfileSerializer(
+            request.user, data=request.data, partial=partial
+        )
+        serializer.is_valid(raise_exception=True)
+        serializer.save()
+        return Response(serializer.data)
 
     def retrieve(self, request, *args, **kwargs):
         try:
@@ -472,6 +660,7 @@ class UserProfileViewset(viewsets.ModelViewSet):
         detail=False,
         methods=["POST"],
         permission_classes=[AllowAny],
+        throttle_classes=[PasswordResetRateThrottle],
         url_path="password-reset",
     )
     def request_password_reset(self, request):
@@ -570,9 +759,11 @@ class UserProfileViewset(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # Set new password
+        # Set new password and revoke all outstanding tokens
         user.set_password(serializer.validated_data["new_password"])
-        user.save()
+        user.token_version += 1
+        user.refresh_jti = ""  # Invalidate current refresh token
+        user.save(update_fields=["password", "token_version", "refresh_jti"])
 
         return Response(
             {"message": "Password has been reset successfully."},
@@ -653,17 +844,17 @@ class UserProfileViewset(viewsets.ModelViewSet):
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
-        # Activate user
+        # Activate user and mark email as verified
         user.is_active = True
-        user.save()
+        user.email_verified = True
+        user.save(update_fields=["is_active", "email_verified"])
 
-        # Generate tokens for immediate login
-        refresh = RefreshToken.for_user(user)
+        # Generate tokens via the single centralized path
+        tokens = get_tokens_for_user(user)
 
         return Response(
             {
-                "access": str(refresh.access_token),
-                "refresh": str(refresh),
+                **tokens,
                 "user": AuthUserSerializer(user).data,
                 "message": "Email verified successfully.",
             },
@@ -703,7 +894,26 @@ class UserProfileViewset(viewsets.ModelViewSet):
         400: OpenApiResponse(description="Invalid token or code"),
     },
 )
-class GoogleLogin(SocialLoginView):
+class _VersionedSocialLoginView(SocialLoginView):
+    """
+    Base class that overrides dj_rest_auth's SocialLoginView so that
+    the JWT pair returned on social login is created via our centralized
+    VersionedRefreshToken, guaranteeing identical claims to all other flows.
+    """
+
+    def get_response(self):
+        tokens = get_tokens_for_user(self.user)
+        user_data = AuthUserSerializer(self.user).data
+
+        response_data = {
+            **tokens,
+            "user": user_data,
+        }
+
+        return Response(response_data, status=status.HTTP_200_OK)
+
+
+class GoogleLogin(_VersionedSocialLoginView):
     """
     Google OAuth Login - Accepts either:
 
@@ -747,7 +957,7 @@ class GoogleLogin(SocialLoginView):
         400: OpenApiResponse(description="Invalid authorization code"),
     },
 )
-class GitHubLogin(SocialLoginView):
+class GitHubLogin(_VersionedSocialLoginView):
     """
     GitHub OAuth Login - Accepts authorization code:
 
@@ -795,6 +1005,10 @@ def get_oauth_urls(request):
     4. Provider redirects back with `code` param
     5. Frontend extracts `code` and POSTs to /api/v1/auth/social/google/ or /github/
     """
+    # Generate a cryptographic state token to prevent login-CSRF.
+    # The frontend must store this value and the callback must verify it.
+    state = secrets.token_urlsafe(32)
+
     google_url = (
         "https://accounts.google.com/o/oauth2/v2/auth?"
         f"client_id={settings.GOOGLE_CLIENT_ID}&"
@@ -802,22 +1016,192 @@ def get_oauth_urls(request):
         "response_type=code&"
         "scope=openid%20email%20profile&"
         "access_type=offline&"
-        "prompt=consent"
+        "prompt=consent&"
+        f"state={state}"
     )
 
     github_url = (
         "https://github.com/login/oauth/authorize?"
         f"client_id={settings.GITHUB_CLIENT_ID}&"
         f"redirect_uri={settings.GITHUB_CALLBACK_URL}&"
-        "scope=read:user%20user:email"
+        f"scope=read:user%20user:email&"
+        f"state={state}"
     )
 
-    return Response(
+    response = Response(
         {
             "google": google_url,
             "github": github_url,
+            "state": state,
         }
     )
+    # Also set the state in a secure, HTTP-only, SameSite cookie
+    # so the callback can verify it server-side.
+    response.set_cookie(
+        "oauth_state",
+        state,
+        max_age=600,  # 10 minutes
+        httponly=True,
+        samesite="Lax",
+        secure=not settings.DEBUG,
+    )
+    return response
+
+
+# =============================================================================
+# API KEY MANAGEMENT VIEWS
+# =============================================================================
+
+
+@extend_schema(
+    tags=["Authentication"],
+    summary="List My API Keys",
+    description=(
+        "Returns all API keys belonging to the authenticated user. "
+        "The raw key is never returned — only the prefix, expiry, etc."
+    ),
+    responses={
+        200: inline_serializer(
+            name="APIKeyListResponse",
+            fields={
+                "id": drf_serializers.UUIDField(),
+                "name": drf_serializers.CharField(),
+                "prefix": drf_serializers.CharField(),
+                "is_active": drf_serializers.BooleanField(),
+                "created_at": drf_serializers.DateTimeField(),
+                "last_used_at": drf_serializers.DateTimeField(),
+                "expires_at": drf_serializers.DateTimeField(),
+            },
+        ),
+    },
+)
+@api_view(["GET"])
+@permission_classes([IsAuthenticated])
+def list_api_keys(request):
+    """Return all API keys for the authenticated user (metadata only)."""
+    keys = (
+        APIKey.objects.filter(user=request.user)
+        .order_by("-created_at")
+        .values(
+            "id",
+            "name",
+            "prefix",
+            "is_active",
+            "created_at",
+            "last_used_at",
+            "expires_at",
+        )
+    )
+    return Response(list(keys))
+
+
+@extend_schema(
+    tags=["Authentication"],
+    summary="Create API Key",
+    description=(
+        "Generate a new API key with a custom name and expiration. "
+        "The raw key is returned **only once** in the response."
+    ),
+    request=inline_serializer(
+        name="CreateAPIKeyRequest",
+        fields={
+            "name": drf_serializers.CharField(
+                required=False,
+                help_text="A friendly label (default: 'default')",
+            ),
+            "expires_in_days": drf_serializers.IntegerField(
+                required=False,
+                help_text="Number of days until expiry (default: 365)",
+            ),
+        },
+    ),
+    responses={
+        201: inline_serializer(
+            name="CreateAPIKeyResponse",
+            fields={
+                "id": drf_serializers.UUIDField(),
+                "name": drf_serializers.CharField(),
+                "prefix": drf_serializers.CharField(),
+                "api_key": drf_serializers.CharField(
+                    help_text="The raw API key — shown only once!"
+                ),
+                "expires_at": drf_serializers.DateTimeField(),
+                "created_at": drf_serializers.DateTimeField(),
+            },
+        ),
+    },
+)
+@api_view(["POST"])
+@permission_classes([IsAuthenticated])
+def create_api_key(request):
+    """
+    Create a brand-new API key with optional name and expiry.
+    The raw key is returned once — the user must copy it now.
+    """
+    from datetime import timedelta
+
+    # Security: limit number of active keys per user
+    active_count = APIKey.objects.filter(user=request.user, is_active=True).count()
+    if active_count >= APIKey.MAX_KEYS_PER_USER:
+        return Response(
+            {
+                "error": f"Maximum of {APIKey.MAX_KEYS_PER_USER} active API keys allowed."
+            },
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    name = request.data.get("name", "default").strip() or "default"
+    expires_in_days = request.data.get("expires_in_days", 365)
+
+    try:
+        expires_in_days = int(expires_in_days)
+        if expires_in_days < 1:
+            raise ValueError
+    except (ValueError, TypeError):
+        return Response(
+            {"error": "expires_in_days must be a positive integer."},
+            status=status.HTTP_400_BAD_REQUEST,
+        )
+
+    expires_at = timezone.now() + timedelta(days=expires_in_days)
+    key_obj, raw_key = APIKey.create_key(request.user, name=name, expires_at=expires_at)
+    return Response(
+        {
+            "id": key_obj.id,
+            "name": key_obj.name,
+            "prefix": key_obj.prefix,
+            "api_key": raw_key,
+            "expires_at": key_obj.expires_at,
+            "created_at": key_obj.created_at,
+        },
+        status=status.HTTP_201_CREATED,
+    )
+
+
+@extend_schema(
+    tags=["Authentication"],
+    summary="Delete API Key",
+    description="Permanently delete the user's API key by its ID.",
+    responses={
+        200: inline_serializer(
+            name="DeleteAPIKeyResponse",
+            fields={"message": drf_serializers.CharField()},
+        ),
+        404: OpenApiResponse(description="API key not found"),
+    },
+)
+@api_view(["DELETE"])
+@permission_classes([IsAuthenticated])
+def delete_api_key(request, key_id):
+    """Permanently delete one API key belonging to the authenticated user."""
+    deleted, _ = APIKey.objects.filter(pk=key_id, user=request.user).delete()
+
+    if not deleted:
+        return Response(
+            {"error": "API key not found."},
+            status=status.HTTP_404_NOT_FOUND,
+        )
+    return Response({"message": "API key deleted."})
 
 
 # =============================================================================
@@ -868,6 +1252,7 @@ def google_callback(request):
     """
     code = request.GET.get("code")
     error = request.GET.get("error")
+    state = request.GET.get("state")
 
     if error:
         return Response(
@@ -881,6 +1266,18 @@ def google_callback(request):
             status=status.HTTP_400_BAD_REQUEST,
         )
 
+    # Validate state parameter to prevent login-CSRF
+    expected_state = request.COOKIES.get("oauth_state")
+    if (
+        not state
+        or not expected_state
+        or not secrets.compare_digest(state, expected_state)
+    ):
+        logger.warning("OAuth state mismatch in Google callback")
+        return _social_auth_error_response(
+            "Invalid OAuth state. Please try logging in again."
+        )
+
     # Post to internal social login endpoint
     token_url = request.build_absolute_uri("/api/v1/auth/social/google/")
 
@@ -890,12 +1287,15 @@ def google_callback(request):
             json={"code": code},
             timeout=10,
         )
-        return Response(response.json(), status=response.status_code)
-    except requests.RequestException as exc:
-        return Response(
-            {"error": "Failed to contact auth service", "detail": str(exc)},
-            status=status.HTTP_502_BAD_GATEWAY,
+        if response.status_code == 200:
+            resp = _social_auth_redirect_response(response.json())
+            resp.delete_cookie("oauth_state")
+            return resp
+        return _social_auth_error_response(
+            "Google authentication failed. Please try again."
         )
+    except requests.RequestException:
+        return _social_auth_error_response("Failed to contact auth service.")
 
 
 @extend_schema(
@@ -940,6 +1340,7 @@ def github_callback(request):
     """
     code = request.GET.get("code")
     error = request.GET.get("error")
+    state = request.GET.get("state")
 
     if error:
         return Response(
@@ -953,6 +1354,18 @@ def github_callback(request):
             status=status.HTTP_400_BAD_REQUEST,
         )
 
+    # Validate state parameter to prevent login-CSRF
+    expected_state = request.COOKIES.get("oauth_state")
+    if (
+        not state
+        or not expected_state
+        or not secrets.compare_digest(state, expected_state)
+    ):
+        logger.warning("OAuth state mismatch in GitHub callback")
+        return _social_auth_error_response(
+            "Invalid OAuth state. Please try logging in again."
+        )
+
     token_url = request.build_absolute_uri("/api/v1/auth/social/github/")
 
     try:
@@ -961,9 +1374,98 @@ def github_callback(request):
             json={"code": code},
             timeout=10,
         )
-        return Response(response.json(), status=response.status_code)
-    except requests.RequestException as exc:
-        return Response(
-            {"error": "Failed to contact auth service", "detail": str(exc)},
-            status=status.HTTP_502_BAD_GATEWAY,
+        if response.status_code == 200:
+            resp = _social_auth_redirect_response(response.json())
+            resp.delete_cookie("oauth_state")
+            return resp
+        return _social_auth_error_response(
+            "GitHub authentication failed. Please try again."
         )
+    except requests.RequestException:
+        return _social_auth_error_response("Failed to contact auth service.")
+
+
+# =============================================================================
+# SOCIAL AUTH REDIRECT HELPERS
+# =============================================================================
+
+
+def _social_auth_redirect_response(token_data):
+    """
+    Redirects to the frontend callback page with tokens as URL params.
+    The frontend (on its own origin) stores them in localStorage.
+    """
+    frontend_url = getattr(settings, "FRONTEND_URL", "")
+    code = str(uuid.uuid4())
+    cache_key = f"social_auth_{code}"
+    print(cache_key)
+    cache.set(cache_key, token_data, timeout=60)  # Store tokens for
+    redirect_url = f"{frontend_url}/oauth/callback?code={code}"
+
+    return HttpResponseRedirect(redirect_url)
+
+
+def _social_auth_error_response(message):
+    frontend_url = getattr(settings, "FRONTEND_URL", "http://localhost:5173")
+    params = urlencode({"error": message})
+    return HttpResponseRedirect(f"{frontend_url}/oauth/callback?{params}")
+
+
+class ExchangeTokenView(APIView):
+    """
+    Exchanges a short-lived authorization code for JWT tokens.
+    This pattern prevents exposing tokens in the URL.
+    """
+
+    permission_classes = [AllowAny]
+    throttle_classes = [SocialExchangeRateThrottle]
+    throttle_scope = "social_exchange"  # Applies the '5/m' rate limit
+
+    def post(self, request):
+        code = request.data.get("code")
+        print(code)
+
+        # 1. Validate existence
+        if not code:
+            return Response(
+                {"error": "Authorization code is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # 2. Validate UUID format (prevent cache key injection attacks)
+        try:
+            uuid.UUID(str(code))
+        except ValueError:
+            logger.warning(
+                f"Invalid UUID format attempted from IP: {self._get_client_ip(request)}"
+            )
+            return Response(
+                {"error": "Invalid code format."}, status=status.HTTP_400_BAD_REQUEST
+            )
+
+        # 3. Construct cache key and lookup
+        cache_key = f"social_auth_{code}"
+        token_data = cache.get(cache_key)
+
+        if not token_data:
+            logger.warning(
+                f"Failed token exchange attempt for code: {code} (Expired or Invalid)"
+            )
+            return Response(
+                {"error": "Invalid or expired code. Please try logging in again."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        # 4. Single-use enforcement: Delete immediately
+        cache.delete(cache_key)
+
+        # 5. Return tokens
+        return Response(token_data, status=status.HTTP_200_OK)
+
+    def _get_client_ip(self, request):
+        x_forwarded_for = request.META.get("HTTP_X_FORWARDED_FOR")
+        if x_forwarded_for:
+            ip = x_forwarded_for.split(",")[0]
+        else:
+            ip = request.META.get("REMOTE_ADDR")
+        return ip

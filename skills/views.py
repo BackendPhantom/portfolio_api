@@ -1,13 +1,9 @@
 from django.shortcuts import render
+from drf_spectacular.utils import OpenApiResponse, extend_schema, extend_schema_view
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
 from rest_framework.exceptions import MethodNotAllowed
 from rest_framework.response import Response
-from drf_spectacular.utils import (
-    extend_schema,
-    extend_schema_view,
-    OpenApiResponse,
-)
 
 from commons.permissions import IsAuthenticatedAndOwner
 
@@ -55,13 +51,7 @@ class SkillCategoryViewSet(viewsets.ModelViewSet):
     def update(self, request, *args, **kwargs):
         raise MethodNotAllowed(request.method)
 
-    def retrieve(self, request, *args, **kwargs):
-        raise MethodNotAllowed(request.method)
-
     def partial_update(self, request, *args, **kwargs):
-        raise MethodNotAllowed(request.method)
-
-    def destroy(self, request, *args, **kwargs):
         raise MethodNotAllowed(request.method)
 
 
@@ -102,11 +92,7 @@ class SkillViewSet(viewsets.ModelViewSet):
     def update(self, request, *args, **kwargs):
         raise MethodNotAllowed(request.method)
 
-    def retrieve(self, request, *args, **kwargs):
         raise MethodNotAllowed(request.method)
 
     def partial_update(self, request, *args, **kwargs):
-        raise MethodNotAllowed(request.method)
-
-    def destroy(self, request, *args, **kwargs):
         raise MethodNotAllowed(request.method)

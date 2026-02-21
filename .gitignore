@@ -1,7 +1,13 @@
 __pycache__/
 */migrations/*
 !*/migrations/__init__.py
+.env
 *.json
 *.sqlite3
 templates/
+frontend_views.py
 improvements/
+*.prettierignore
+test.py
+postgres.sh
+*.example

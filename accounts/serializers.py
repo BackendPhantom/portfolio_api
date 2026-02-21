@@ -7,15 +7,22 @@ from django.db import transaction
 from rest_framework import serializers
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 
+from .tokens import VersionedRefreshToken
+
 User = get_user_model()
 
 
 class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
+    """
+    Uses VersionedRefreshToken so that every token pair issued via
+    SimpleJWT's obtain-pair flow carries token_version.
+    """
+
+    token_class = VersionedRefreshToken
+
     @classmethod
     def get_token(cls, user):
-        token = super().get_token(user)
-        token["token_version"] = user.token_version
-        return token
+        return cls.token_class.for_user(user)
 
 
 # =============================================================================
@@ -283,10 +290,13 @@ class ChangePasswordSerializer(serializers.Serializer):
         return attrs
 
     def save(self):
-        """Update user's password."""
+        """Update user's password and revoke all existing tokens."""
         user = self.context["request"].user
         user.set_password(self.validated_data["new_password"])
-        user.save()
+        # Bump token_version to invalidate every outstanding JWT
+        user.token_version += 1
+        user.refresh_jti = ""  # Invalidate current refresh token
+        user.save(update_fields=["password", "token_version", "refresh_jti"])
         return user
 
 

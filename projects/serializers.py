@@ -35,7 +35,7 @@ class ProjectSerializer(serializers.ModelSerializer):
         model = Project
         fields = "__all__"
         # User is read_only because we set it automatically in the create() method below
-        read_only_fields = ("id", "user")
+        read_only_fields = ("id", "user", "slug")
 
     def create(self, validated_data):
         """

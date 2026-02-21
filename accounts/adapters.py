@@ -63,7 +63,7 @@ class CustomSocialAccountAdapter(DefaultSocialAccountAdapter):
         extra_data = sociallogin.account.extra_data
         provider = sociallogin.account.provider
 
-        if provider == "google":
+        if provider == "Google":
             # Google provides 'picture' for avatar
             user.avatar = extra_data.get("picture", "")
             # Google might provide name separately
@@ -74,7 +74,7 @@ class CustomSocialAccountAdapter(DefaultSocialAccountAdapter):
             # Mark email as verified (Google verifies emails)
             user.email_verified = True
 
-        elif provider == "github":
+        elif provider == "Github":
             # GitHub provides 'avatar_url' for avatar
             user.avatar = extra_data.get("avatar_url", "")
             # GitHub might provide name as a single field

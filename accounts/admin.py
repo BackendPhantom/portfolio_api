@@ -2,6 +2,8 @@ from django.contrib import admin
 from django.contrib.auth import get_user_model
 from django.contrib.auth.admin import UserAdmin as BaseUserAdmin
 
+from .models import APIKey
+
 User = get_user_model()
 
 
@@ -119,3 +121,14 @@ class UserAdmin(BaseUserAdmin):
     )
 
     readonly_fields = ("created_at", "updated_at", "last_login", "date_joined")
+
+
+@admin.register(APIKey)
+class APIKeyAdmin(admin.ModelAdmin):
+    """Admin for API Key management."""
+
+    list_display = ("prefix", "name", "user", "is_active", "created_at", "last_used_at")
+    list_filter = ("is_active",)
+    search_fields = ("name", "prefix", "user__email")
+    readonly_fields = ("prefix", "key_hash", "created_at", "last_used_at")
+    raw_id_fields = ("user",)
