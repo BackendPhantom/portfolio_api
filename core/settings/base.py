@@ -51,6 +51,7 @@ INSTALLED_APPS = [
     "rest_framework_simplejwt",
     "django_filters",
     "django_extensions",
+    "phonenumber_field",
     # Authentication
     "allauth",
     "allauth.account",

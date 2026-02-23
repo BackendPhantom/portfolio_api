@@ -10,6 +10,7 @@ User = get_user_model()
 @admin.register(User)
 class UserAdmin(BaseUserAdmin):
     """Custom admin for the User model with all portfolio fields."""
+    
 
     list_display = (
         "email",
@@ -44,6 +45,9 @@ class UserAdmin(BaseUserAdmin):
                     "title",
                     "bio",
                     "location",
+                    "date_of_birth",
+                    "phone_number",
+                   
                 ),
                 "classes": ("collapse",),
             },

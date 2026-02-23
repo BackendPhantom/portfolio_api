@@ -601,6 +601,7 @@ class UserProfileViewset(viewsets.ModelViewSet):
             user, data=request.data, context={"request": request}
         )
         serializer.is_valid(raise_exception=True)
+        
         serializer.save()
         return Response(
             {"message": "Password changed successfully."}, status=status.HTTP_200_OK

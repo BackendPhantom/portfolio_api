@@ -8,6 +8,7 @@ from django.conf import settings as django_settings
 from django.contrib.auth.models import AbstractUser
 from django.db import IntegrityError, models, transaction
 from django.utils import timezone
+from phonenumber_field.modelfields import PhoneNumberField
 
 
 class User(AbstractUser):
@@ -45,6 +46,8 @@ class User(AbstractUser):
     location = models.CharField(
         max_length=100, blank=True, help_text="City, Country or Remote"
     )
+    date_of_birth = models.DateField(null=True, blank=True)
+    phone_number = PhoneNumberField(blank=True, help_text="Contact phone number with country code") 
     website = models.URLField(blank=True, help_text="Personal website or portfolio URL")
 
     # -------------------------------------------------------------------------

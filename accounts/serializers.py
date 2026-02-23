@@ -6,8 +6,11 @@ from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import transaction
 from rest_framework import serializers
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
+from allauth.socialaccount.models import SocialAccount
 
 from .tokens import VersionedRefreshToken
+from phonenumber_field.serializerfields import PhoneNumberField as SerializerPhoneNumberField
+from phonenumber_field.validators import validate_international_phonenumber, validate_phonenumber
 
 User = get_user_model()
 
@@ -38,6 +41,7 @@ class AuthUserSerializer(serializers.ModelSerializer):
 
     full_name = serializers.CharField(read_only=True)
     has_complete_profile = serializers.BooleanField(read_only=True)
+    auth_provider = serializers.SerializerMethodField(read_only=True)
 
     class Meta:
         model = User
@@ -50,8 +54,22 @@ class AuthUserSerializer(serializers.ModelSerializer):
             "avatar",
             "title",
             "has_complete_profile",
+            "auth_provider",
         )
         read_only_fields = fields
+
+    def get_auth_provider(self, obj):
+        """Return the auth provider for the user (e.g. 'google', 'github', 'email')."""
+        try:
+            sa = SocialAccount.objects.filter(user=obj).order_by("-pk").first()
+            if sa:
+                return sa.provider
+        except Exception:
+            pass
+        # Fallback to email/local if no social account exists
+        if obj.has_usable_password():
+            return "email"
+        return "unknown"
 
 
 # =============================================================================
@@ -155,6 +173,10 @@ class UserProfileSerializer(serializers.ModelSerializer):
     full_name = serializers.CharField(read_only=True)
     has_complete_profile = serializers.BooleanField(read_only=True)
     email = serializers.EmailField(read_only=True)  # Email cannot be changed here
+    auth_provider = serializers.SerializerMethodField(read_only=True)
+    phone_number = SerializerPhoneNumberField(
+        required=False, allow_blank=True, help_text="Contact phone number with country code"
+    )
 
     class Meta:
         model = User
@@ -177,10 +199,26 @@ class UserProfileSerializer(serializers.ModelSerializer):
             "is_open_to_freelance",
             "is_profile_public",
             "has_complete_profile",
+            "email_verified",
+            "phone_number",
+            "date_of_birth",
             "created_at",
             "updated_at",
+            "auth_provider",
         )
         read_only_fields = ("id", "email", "created_at", "updated_at")
+
+    def get_auth_provider(self, obj):
+        """Return the auth provider for the user (e.g. 'google', 'github', 'email')."""
+        try:
+            sa = SocialAccount.objects.filter(user=obj).order_by("-pk").first()
+            if sa:
+                return sa.provider
+        except Exception:
+            pass
+        if obj.has_usable_password():
+            return "email"
+        return "unknown"
 
     def validate_website(self, value):
         """Validate website URL format."""
@@ -198,6 +236,16 @@ class UserProfileSerializer(serializers.ModelSerializer):
         """Validate LinkedIn URL."""
         if value and "linkedin.com" not in value.lower():
             raise serializers.ValidationError("Please enter a valid LinkedIn URL.")
+        return value
+    def validate_phone_number(self, value):
+        """Validate if phone number is valid and if phone number is in international format."""
+        if value:
+            try:
+                validate_phonenumber(value)
+                validate_international_phonenumber(value)
+            except serializers.ValidationError as e:
+                print(str(e))
+                raise serializers.ValidationError(e.detail)
         return value
 
 
