@@ -9,6 +9,7 @@ from django.contrib.auth.models import AbstractUser
 from django.db import IntegrityError, models, transaction
 from django.utils import timezone
 from phonenumber_field.modelfields import PhoneNumberField
+from django.core.exceptions import ValidationError
 
 
 class User(AbstractUser):
@@ -47,7 +48,9 @@ class User(AbstractUser):
         max_length=100, blank=True, help_text="City, Country or Remote"
     )
     date_of_birth = models.DateField(null=True, blank=True)
-    phone_number = PhoneNumberField(blank=True, help_text="Contact phone number with country code") 
+    phone_number = PhoneNumberField(
+        blank=True, help_text="Contact phone number with country code"
+    )
     website = models.URLField(blank=True, help_text="Personal website or portfolio URL")
 
     # -------------------------------------------------------------------------
@@ -162,6 +165,18 @@ class APIKey(models.Model):
     def __str__(self):
         return f"{self.name} ({self.prefix}…) — {self.user.email}"
 
+    def clean(self):
+        if self.expires_at:
+            max_expiry = timezone.now() + timedelta(days=self.MAX_EXPIRY_DAYS)
+            if self.expires_at > max_expiry:
+                raise ValidationError(
+                    f"Expiry cannot exceed {self.MAX_EXPIRY_DAYS} days from now."
+                )
+
+    def save(self, *args, **kwargs):
+        self.full_clean()
+        super().save(*args, **kwargs)
+
     @property
     def is_valid(self):
         """Key is active and not expired."""
@@ -172,6 +187,7 @@ class APIKey(models.Model):
         return True
 
     MAX_KEYS_PER_USER = 10
+    MAX_EXPIRY_DAYS = 180
 
     def record_usage(self):
         """Stamp last_used_at — only writes if >5 min since last stamp."""
@@ -205,8 +221,14 @@ class APIKey(models.Model):
 
         If *expires_at* is not provided, defaults to 1 year from now.
         """
+        now = timezone.now()
+        max_expiry = now + timedelta(days=cls.MAX_EXPIRY_DAYS)
         if expires_at is None:
-            expires_at = timezone.now() + timedelta(days=365)
+            expires_at = max_expiry
+        if expires_at > max_expiry:
+            raise ValidationError(
+                f"API keys cannot expire more than {cls.MAX_EXPIRY_DAYS} days from now."
+            )
 
         raw = f"{cls._KEY_PREFIX}_{secrets.token_urlsafe(48)}"
         instance = cls.objects.create(

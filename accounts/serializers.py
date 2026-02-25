@@ -9,8 +9,13 @@ from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from allauth.socialaccount.models import SocialAccount
 
 from .tokens import VersionedRefreshToken
-from phonenumber_field.serializerfields import PhoneNumberField as SerializerPhoneNumberField
-from phonenumber_field.validators import validate_international_phonenumber, validate_phonenumber
+from phonenumber_field.serializerfields import (
+    PhoneNumberField as SerializerPhoneNumberField,
+)
+from phonenumber_field.validators import (
+    validate_international_phonenumber,
+    validate_phonenumber,
+)
 
 User = get_user_model()
 
@@ -175,7 +180,9 @@ class UserProfileSerializer(serializers.ModelSerializer):
     email = serializers.EmailField(read_only=True)  # Email cannot be changed here
     auth_provider = serializers.SerializerMethodField(read_only=True)
     phone_number = SerializerPhoneNumberField(
-        required=False, allow_blank=True, help_text="Contact phone number with country code"
+        required=False,
+        allow_blank=True,
+        help_text="Contact phone number with country code",
     )
 
     class Meta:
@@ -237,6 +244,7 @@ class UserProfileSerializer(serializers.ModelSerializer):
         if value and "linkedin.com" not in value.lower():
             raise serializers.ValidationError("Please enter a valid LinkedIn URL.")
         return value
+
     def validate_phone_number(self, value):
         """Validate if phone number is valid and if phone number is in international format."""
         if value:

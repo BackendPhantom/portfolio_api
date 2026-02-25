@@ -601,7 +601,7 @@ class UserProfileViewset(viewsets.ModelViewSet):
             user, data=request.data, context={"request": request}
         )
         serializer.is_valid(raise_exception=True)
-        
+
         serializer.save()
         return Response(
             {"message": "Password changed successfully."}, status=status.HTTP_200_OK
@@ -771,6 +771,49 @@ class UserProfileViewset(viewsets.ModelViewSet):
             status=status.HTTP_200_OK,
         )
 
+    
+    @action(detail=False, methods=["POST"], permission_classes=[AllowAny], url_path="verify-email/request")
+    def verify_email_request(self,request):
+        """
+        Endpoint to request a new verification email. Accepts an email address and, if a matching inactive user is found, sends a new verification email.
+
+        POST api/v1/users/verify-email/request/?email=user@example.com 
+        """
+        email = request.data.get("email", "").lower().strip()
+        if not email:
+            return Response(
+                {"error": "Email query parameter is required."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            user = User.objects.get(email__iexact=email, is_active=False)
+        except User.DoesNotExist:
+            return Response(
+                {
+                    "message": "If an inactive account with that email exists, a new verification link has been sent."
+                },
+                status=status.HTTP_200_OK,
+            )
+
+        # Generate verification token
+        token = default_token_generator.make_token(user)
+        uid = urlsafe_base64_encode(force_bytes(user.pk))
+
+        # Build verification URL (frontend should handle this route)
+        verify_url = f"{settings.FRONTEND_URL}/verify-email?uid={uid}&token={token}"
+
+        # Send verification email
+        send_verification_email.delay(user.email, verify_url)
+
+        return Response(
+            {
+                "message": "If an inactive account with that email exists, a new verification link has been sent."
+            },
+            status=status.HTTP_200_OK,
+        )
+
+    
     @extend_schema(
         tags=["Authentication"],
         summary="Verify Email",
@@ -1143,6 +1186,7 @@ def create_api_key(request):
 
     # Security: limit number of active keys per user
     active_count = APIKey.objects.filter(user=request.user, is_active=True).count()
+
     if active_count >= APIKey.MAX_KEYS_PER_USER:
         return Response(
             {
@@ -1152,20 +1196,32 @@ def create_api_key(request):
         )
 
     name = request.data.get("name", "default").strip() or "default"
-    expires_in_days = request.data.get("expires_in_days", 365)
+    expires_in_days = request.data.get("expires_in_days", 90)
 
     try:
         expires_in_days = int(expires_in_days)
+
         if expires_in_days < 1:
             raise ValueError
+
+        if expires_in_days > APIKey.MAX_EXPIRY_DAYS:
+            return Response(
+                {"error": f"Expiration period cannot exceed {APIKey.MAX_EXPIRY_DAYS} days."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
     except (ValueError, TypeError):
         return Response(
-            {"error": "expires_in_days must be a positive integer."},
+            {
+                "error": f"expires_in_days must be a positive integer not greater than {APIKey.MAX_EXPIRY_DAYS}."
+            },
             status=status.HTTP_400_BAD_REQUEST,
         )
 
     expires_at = timezone.now() + timedelta(days=expires_in_days)
+
     key_obj, raw_key = APIKey.create_key(request.user, name=name, expires_at=expires_at)
+
     return Response(
         {
             "id": key_obj.id,
