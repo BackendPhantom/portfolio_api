@@ -31,9 +31,3 @@ CORS_ALLOW_ALL_ORIGINS = True
 #     }
 # }
 
-REST_FRAMEWORK = {
-    "DEFAULT_AUTHENTICATION_CLASSES": (
-        "accounts.authentication.VersionedJWTAuthentication",
-        "accounts.authentication.APIKeyAuthentication",
-        "rest_framework.authentication.SessionAuthentication",
-    ),}
