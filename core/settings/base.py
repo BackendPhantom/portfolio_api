@@ -6,8 +6,11 @@ from datetime import timedelta
 from pathlib import Path
 
 from decouple import Csv, config
+import os
 
-BASE_DIR = Path(__file__).resolve().parent.parent.parent
+# BASE_DIR = Path(__file__).resolve().parent.parent.parent
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 
 # =============================================================================
 # CORE
@@ -69,6 +72,7 @@ MIDDLEWARE = [
     "corsheaders.middleware.CorsMiddleware",
     "core.middleware.RequestLoggingMiddleware",
     "django.middleware.security.SecurityMiddleware",
+    "whitenoise.middleware.WhiteNoiseMiddleware",
     "django.middleware.gzip.GZipMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
@@ -145,7 +149,9 @@ USE_TZ = True
 # =============================================================================
 # STATIC FILES
 # =============================================================================
-STATIC_URL = "static/"
+STATIC_URL = "/static/"
+STATIC_ROOT = os.path.join(BASE_DIR, "staticfiles")
+STATICFILES_STORAGE = "whitenoise.storage.CompressedManifestStaticFilesStorage"
 
 # =============================================================================
 # DJANGO REST FRAMEWORK
