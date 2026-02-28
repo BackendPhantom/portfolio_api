@@ -12,17 +12,23 @@ ALLOWED_HOSTS = os.environ["ALLOWED_HOSTS"].split(",")
 # Override SECRET_KEY from env for extra safety
 SECRET_KEY = os.environ["SECRET_KEY"]
 
-# PostgreSQL
+
+import dj_database_url
+
 DATABASES = {
-    "default": {
-        "ENGINE": "django.db.backends.postgresql",
-        "NAME": os.environ["DB_NAME"],
-        "USER": os.environ["DB_USER"],
-        "PASSWORD": os.environ["DB_PASSWORD"],
-        "HOST": os.environ["DB_HOST"],
-        "PORT": os.environ.get("DB_PORT", "5432"),
-    }
+    "default": dj_database_url.config(conn_max_age=600)
 }
+# PostgreSQL
+# DATABASES = {
+#     "default": {
+#         "ENGINE": "django.db.backends.postgresql",
+#         "NAME": os.environ["DB_NAME"],
+#         "USER": os.environ["DB_USER"],
+#         "PASSWORD": os.environ["DB_PASSWORD"],
+#         "HOST": os.environ["DB_HOST"],
+#         "PORT": os.environ.get("DB_PORT", "5432"),
+#     }
+# }
 
 # Security headers
 SECURE_SSL_REDIRECT = True

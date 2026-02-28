@@ -66,10 +66,10 @@ INSTALLED_APPS = [
 # MIDDLEWARE
 # =============================================================================
 MIDDLEWARE = [
+    "corsheaders.middleware.CorsMiddleware",
     "core.middleware.RequestLoggingMiddleware",
     "django.middleware.security.SecurityMiddleware",
     "django.middleware.gzip.GZipMiddleware",
-    "corsheaders.middleware.CorsMiddleware",
     "django.contrib.sessions.middleware.SessionMiddleware",
     "django.middleware.common.CommonMiddleware",
     "core.middleware.CSRFExemptAPIMiddleware",
@@ -84,7 +84,7 @@ MIDDLEWARE = [
 # =============================================================================
 CORS_ALLOWED_ORIGINS = config(
     "CORS_ALLOWED_ORIGINS",
-    default="http://localhost:3000,http://localhost:8000,http://localhost:5173",
+    default="http://localhost:3000,http://localhost:8000,http://localhost:5173,http://localhost:5174",
     cast=Csv(),
 )
 CORS_ALLOW_CREDENTIALS = True
@@ -94,6 +94,7 @@ CORS_ALLOW_HEADERS = [
     "content-type",
     "origin",
     "x-api-key",
+    "X_API_KEY",
     "x-csrftoken",
     "x-requested-with",
 ]
@@ -270,7 +271,7 @@ CELERY_TASK_TIME_LIMIT = 300
 CACHES = {
     "default": {
         "BACKEND": "django_redis.cache.RedisCache",
-        "LOCATION": config("CACHE_REDIS_URL", default="redis://127.0.0.1:6379/1"),
+        "LOCATION": config("REDIS_URL", default="redis://localhost:6379/1"),
         "OPTIONS": {
             "CLIENT_CLASS": "django_redis.client.DefaultClient",
             "SOCKET_CONNECT_TIMEOUT": 5,
