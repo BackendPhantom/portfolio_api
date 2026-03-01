@@ -4,7 +4,7 @@ Development settings — local dev with SQLite, console email, all CORS.
 
 from .base import *  # noqa: F401, F403
 
-DEBUG = False
+DEBUG = True
 ALLOWED_HOSTS = ["*"]
 
 # SQLite for quick local dev
