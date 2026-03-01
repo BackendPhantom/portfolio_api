@@ -6,7 +6,7 @@ import os
 
 from .base import *  # noqa: F401, F403
 
-DEBUG = False
+DEBUG = True
 ALLOWED_HOSTS = os.environ["ALLOWED_HOSTS"].split(",")
 
 # Override SECRET_KEY from env for extra safety
