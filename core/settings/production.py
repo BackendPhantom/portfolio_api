@@ -4,10 +4,11 @@ Production settings — PostgreSQL, strict security, real email.
 
 import os
 
-from .base import *  # noqa: F401, F403
+from .base import *
+from decouple import Csv, config  # noqa: F401, F403
 
 DEBUG = True
-ALLOWED_HOSTS = os.environ["ALLOWED_HOSTS"].split(",")
+ALLOWED_HOSTS = os.environ.get("ALLOWED_HOSTS", "").split(",")
 
 # Override SECRET_KEY from env for extra safety
 SECRET_KEY = os.environ["SECRET_KEY"]
@@ -54,3 +55,6 @@ EMAIL_USE_TLS = True
 # Strict CORS
 CORS_ALLOW_ALL_ORIGINS = False
 CORS_ALLOWED_ORIGINS = os.environ["CORS_ALLOWED_ORIGINS"].split(",")
+CORS_ALLOWED_ORIGIN_REGEXES = [
+    r"^https://.*\.vercel\.app$",
+]
