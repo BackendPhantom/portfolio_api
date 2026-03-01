@@ -282,7 +282,9 @@ CACHES = {
             "CLIENT_CLASS": "django_redis.client.DefaultClient",
             "SOCKET_CONNECT_TIMEOUT": 5,
             "SOCKET_TIMEOUT": 5,
-            "CONNECTION_POOL_KWARGS": {"max_connections": 50},
+            "CONNECTION_POOL_KWARGS": {"max_connections": 50, "ssl_cert_reqs": None
+            },
+            
             "COMPRESSOR": "django_redis.compressors.zlib.ZlibCompressor",
         },
         "KEY_PREFIX": "portfolio",
