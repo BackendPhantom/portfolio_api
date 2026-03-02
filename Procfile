@@ -1,2 +1,2 @@
 web: gunicorn core.wsgi
-worker: celery -A config worker --loglevel=info
+worker: celery -A core worker --loglevel=info
