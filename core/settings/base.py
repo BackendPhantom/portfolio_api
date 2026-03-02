@@ -7,6 +7,7 @@ from pathlib import Path
 
 from decouple import Csv, config
 import os
+import ssl
 
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 # BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -259,8 +260,9 @@ SOCIALACCOUNT_ADAPTER = "accounts.adapters.CustomSocialAccountAdapter"
 # =============================================================================
 # CELERY (Async Tasks)
 # =============================================================================
-CELERY_BROKER_URL = os.environ.get("REDIS_URL")
-CELERY_RESULT_BACKEND = os.environ.get("REDIS_URL")
+REDIS_URL=os.environ.get("REDIS_URL")
+CELERY_BROKER_URL = REDIS_URL
+CELERY_RESULT_BACKEND = REDIS_URL
 
 CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP = True
 CELERY_ACCEPT_CONTENT = ["json"]
@@ -271,20 +273,38 @@ CELERY_TASK_ACKS_LATE = True
 CELERY_TASK_REJECT_ON_WORKER_LOST = True
 CELERY_TASK_TIME_LIMIT = 300
 
+# 🔴 Critical for Heroku Redis (TLS)
+CELERY_BROKER_USE_SSL = {
+    "ssl_cert_reqs": ssl.CERT_NONE
+}
+
+CELERY_REDIS_BACKEND_USE_SSL = {
+    "ssl_cert_reqs": ssl.CERT_NONE
+}
+
+
+# -------------------
+# Django Cache (Redis)
+# -------------------
+
+
+
 # =============================================================================
 # CACHING (Redis)
 # =============================================================================
 CACHES = {
     "default": {
         "BACKEND": "django_redis.cache.RedisCache",
-        "LOCATION": config("REDIS_URL", default="redis://localhost:6379/1"),
+        "LOCATION": REDIS_URL,
         "OPTIONS": {
             "CLIENT_CLASS": "django_redis.client.DefaultClient",
+            "SSL_CERT_REQS": None,  # Required for Heroku
             "SOCKET_CONNECT_TIMEOUT": 5,
             "SOCKET_TIMEOUT": 5,
-            "CONNECTION_POOL_KWARGS": {"max_connections": 50, "ssl_cert_reqs": None
+            "CONNECTION_POOL_KWARGS": {
+                "max_connections": 50,
+                "ssl_cert_reqs": None,
             },
-            
             "COMPRESSOR": "django_redis.compressors.zlib.ZlibCompressor",
         },
         "KEY_PREFIX": "portfolio",
