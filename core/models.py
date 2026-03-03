@@ -11,6 +11,7 @@ from django.contrib.contenttypes.fields import GenericForeignKey
 from django.contrib.contenttypes.models import ContentType
 from django.db import models
 from django.utils import timezone
+import uuid
 
 
 # =========================================================================
@@ -18,7 +19,7 @@ from django.utils import timezone
 # =========================================================================
 class TimestampedModel(models.Model):
     """Abstract model that adds ``created_at`` and ``updated_at``."""
-
+    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
     created_at = models.DateTimeField(auto_now_add=True, db_index=True)
     updated_at = models.DateTimeField(auto_now=True)
 

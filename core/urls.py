@@ -25,7 +25,7 @@ from drf_spectacular.views import (
     SpectacularSwaggerView,
 )
 
-from .views import DataExportView, RecentActivityView, health_check, StatsView
+from .views import DataExportView, RecentActivityView, StatsView, health_check
 
 # =============================================================================
 # API URL PATTERNS

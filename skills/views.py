@@ -1,4 +1,3 @@
-from django.shortcuts import render
 from drf_spectacular.utils import OpenApiResponse, extend_schema, extend_schema_view
 from rest_framework import status, viewsets
 from rest_framework.decorators import action
@@ -11,7 +10,6 @@ from .models import Skill, SkillCategory
 from .serializers import SkillCategorySerializer, SkillSerializer
 
 
-# Create your views here.
 @extend_schema_view(
     list=extend_schema(
         tags=["Skill Categories"],
@@ -31,27 +29,36 @@ from .serializers import SkillCategorySerializer, SkillSerializer
     destroy=extend_schema(exclude=True),
 )
 class SkillCategoryViewSet(viewsets.ModelViewSet):
-    """ViewSet for managing skill categories."""
+    """
+    Manage skill categories for the authenticated user.
+
+    Only the ``list`` action is publicly exposed (returns categories with
+    nested skills).  Create, update, partial_update, retrieve, and destroy
+    are disabled and return ``405 Method Not Allowed``.
+    """
 
     serializer_class = SkillCategorySerializer
     permission_classes = [IsAuthenticatedAndOwner]
 
     def get_queryset(self):
         """
-        Optimize: Prefetch all skills for each category.
-        This turns N+1 queries into just 2 queries.
+        Return categories owned by the current user with prefetched skills.
+
+        Uses ``prefetch_related('items')`` to avoid N+1 queries when the
+        serializer renders nested skill data.
         """
-        return SkillCategory.objects.filter(user=self.request.user).prefetch_related(
-            "items"
-        )
+        return SkillCategory.objects.all()
 
     def create(self, request, *args, **kwargs):
+        """Disabled — categories are created via the admin or data import."""
         raise MethodNotAllowed(request.method)
 
     def update(self, request, *args, **kwargs):
+        """Disabled — categories are updated via the admin or data import."""
         raise MethodNotAllowed(request.method)
 
     def partial_update(self, request, *args, **kwargs):
+        """Disabled — categories are updated via the admin or data import."""
         raise MethodNotAllowed(request.method)
 
 
@@ -74,25 +81,36 @@ class SkillCategoryViewSet(viewsets.ModelViewSet):
     destroy=extend_schema(exclude=True),
 )
 class SkillViewSet(viewsets.ModelViewSet):
-    """ViewSet for managing individual skills."""
+    """
+    Manage individual skills for the authenticated user.
+
+    Only the ``list`` action is publicly exposed (returns skills with their
+    category info).  Create, update, partial_update, retrieve, and destroy
+    are disabled and return ``405 Method Not Allowed``.
+    """
 
     serializer_class = SkillSerializer
     permission_classes = [IsAuthenticatedAndOwner]
 
     def get_queryset(self):
         """
-        Optimize: Select the category in the same query.
-        This turns N+1 queries into just 1 query.
+        Return skills owned by the current user with their category
+        eagerly loaded via ``select_related`` to avoid N+1 queries.
         """
         return Skill.objects.filter(user=self.request.user).select_related("category")
 
     def create(self, request, *args, **kwargs):
-        raise MethodNotAllowed(request.method)
+        serializer = self.get_serializer(
+            data=request.data, context={"request": request}
+        )
+        serializer.is_valid(raise_exception=True)
+        serializer.save()  # This calls the .create() method in your serializer
+        return Response(serializer.data, status=status.HTTP_201_CREATED)
 
     def update(self, request, *args, **kwargs):
-        raise MethodNotAllowed(request.method)
-
+        """Disabled — skills are updated via the admin or data import."""
         raise MethodNotAllowed(request.method)
 
     def partial_update(self, request, *args, **kwargs):
+        """Disabled — skills are updated via the admin or data import."""
         raise MethodNotAllowed(request.method)

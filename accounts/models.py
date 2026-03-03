@@ -6,19 +6,18 @@ from datetime import timedelta
 
 from django.conf import settings as django_settings
 from django.contrib.auth.models import AbstractUser
+from django.core.exceptions import ValidationError
 from django.db import IntegrityError, models, transaction
 from django.utils import timezone
 from phonenumber_field.modelfields import PhoneNumberField
-from django.core.exceptions import ValidationError
+from core.models import TimestampedModel
 
 
-class User(AbstractUser):
+class User(AbstractUser, TimestampedModel):
     """
     Custom User model for Developer Portfolio.
     Uses email as the primary identifier and UUID as primary key.
-    """
-
-    id = models.UUIDField(primary_key=True, default=uuid.uuid4, editable=False)
+    """    
     email = models.EmailField(unique=True, db_index=True)
     token_version = models.PositiveIntegerField(default=0)
     refresh_jti = models.CharField(

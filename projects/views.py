@@ -21,7 +21,23 @@ from .serializers import ProjectSerializer
 )
 @extend_schema(tags=["Projects"])
 class ProjectViewSet(viewsets.ModelViewSet):
-    """ViewSet for managing user projects in the portfolio."""
+    """
+    Manage portfolio projects for the authenticated user.
+
+    Standard ModelViewSet CRUD endpoints (list, create, retrieve, update,
+    destroy) are **disabled** — they all return ``405 Method Not Allowed``.
+    All functionality is instead exposed through explicitly named custom
+    actions that map to clearer URL paths:
+
+    - ``my_projects``     GET    /projects/my-projects/
+    - ``create_project``  POST   /projects/create-new/
+    - ``project_details`` GET    /projects/{pk}/details/
+    - ``update_project``  PUT|PATCH /projects/{pk}/update-project/
+    - ``delete_project``  DELETE /projects/{pk}/delete-project/
+
+    All endpoints require authentication and enforce ownership via
+    ``IsAuthenticatedAndOwner`` + ``ProjectPermission``.
+    """
 
     queryset = Project.objects.all()
     serializer_class = ProjectSerializer
@@ -29,24 +45,30 @@ class ProjectViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticatedAndOwner, ProjectPermission]
 
     def get_queryset(self):
+        """Return projects owned by the current user with prefetched tech stack."""
         return Project.objects.filter(user=self.request.user).prefetch_related(
-            "tech_stack", "tech_stack__category"
+            "tech_stack"
         )
 
     # --- Disable Standard Methods ---
     def list(self, request, *args, **kwargs):
+        """Disabled — use ``my_projects`` action instead."""
         raise MethodNotAllowed(request.method)
 
     def create(self, request, *args, **kwargs):
+        """Disabled — use ``create_project`` action instead."""
         raise MethodNotAllowed(request.method)
 
     def retrieve(self, request, *args, **kwargs):
+        """Disabled — use ``project_details`` action instead."""
         raise MethodNotAllowed(request.method)
 
     def update(self, request, *args, **kwargs):
+        """Disabled — use ``update_project`` action instead."""
         raise MethodNotAllowed(request.method)
 
     def destroy(self, request, *args, **kwargs):
+        """Disabled — use ``delete_project`` action instead."""
         raise MethodNotAllowed(request.method)
 
     # --- Custom Actions ---
@@ -65,6 +87,7 @@ class ProjectViewSet(viewsets.ModelViewSet):
     )
     @action(detail=False, methods=["GET"], url_path="my-projects")
     def my_projects(self, request):
+        """Return a paginated list of all projects belonging to the authenticated user."""
         queryset = self.get_queryset()
 
         # KEY CHANGE: You must manually call the paginator inside a custom action
@@ -95,6 +118,7 @@ class ProjectViewSet(viewsets.ModelViewSet):
     )
     @action(detail=False, methods=["POST"], url_path="create-new")
     def create_project(self, request):
+        """Create a new project for the authenticated user with optional tech stack."""
         # We pass the request context so the serializer can access request.user
         serializer = self.get_serializer(
             data=request.data, context={"request": request}
@@ -121,6 +145,7 @@ class ProjectViewSet(viewsets.ModelViewSet):
     )
     @action(detail=True, methods=["GET"], url_path="details")
     def project_details(self, request, pk=None):
+        """Retrieve detailed information for a single project by primary key."""
         instance = self.get_object()  # get_object() handles 404s automatically
         serializer = self.get_serializer(instance)
         return Response(serializer.data)
@@ -145,6 +170,7 @@ class ProjectViewSet(viewsets.ModelViewSet):
     )
     @action(detail=True, methods=["PUT", "PATCH"], url_path="update-project")
     def update_project(self, request, pk=None):
+        """Full or partial update of an existing project. PATCH for partial, PUT for full."""
         instance = self.get_object()
         # Pass partial=True if method is PATCH, else False
         partial = True
@@ -173,6 +199,7 @@ class ProjectViewSet(viewsets.ModelViewSet):
     )
     @action(detail=True, methods=["DELETE"], url_path="delete-project")
     def delete_project(self, request, pk=None):
+        """Permanently delete a project. Returns 204 No Content on success."""
         # Note: Serializers generally don't handle deletion, so this logic stays in the view
         instance = self.get_object()
         instance.delete()

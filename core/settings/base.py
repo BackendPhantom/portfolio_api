@@ -2,12 +2,12 @@
 Base settings shared by all environments (development, production, testing).
 """
 
+import os
+import ssl
 from datetime import timedelta
 from pathlib import Path
 
 from decouple import Csv, config
-import os
-import ssl
 
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
 # BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -168,7 +168,7 @@ REST_FRAMEWORK = {
         "rest_framework.filters.OrderingFilter",
     ],
     "DEFAULT_PAGINATION_CLASS": "rest_framework.pagination.PageNumberPagination",
-    "PAGE_SIZE": 5,
+    "PAGE_SIZE": 10,
     "DEFAULT_SCHEMA_CLASS": "drf_spectacular.openapi.AutoSchema",
     "EXCEPTION_HANDLER": "core.exception_handler.custom_exception_handler",
     "DEFAULT_THROTTLE_RATES": {
@@ -250,6 +250,12 @@ GITHUB_CALLBACK_URL = config(
 )
 FRONTEND_URL = config("FRONTEND_URL", default="http://localhost:5173")
 
+# =============================================================================
+# SIGNED TOKEN EXPIRY (django.core.signing)
+# =============================================================================
+EMAIL_VERIFICATION_TOKEN_MAX_AGE = 24 * 3600  # 24 hours (seconds)
+PASSWORD_RESET_TOKEN_MAX_AGE = 24 * 3600  # 24 hours (seconds)
+
 SOCIALACCOUNT_EMAIL_AUTHENTICATION = True
 SOCIALACCOUNT_EMAIL_AUTHENTICATION_AUTO_CONNECT = True
 SOCIALACCOUNT_EMAIL_REQUIRED = True
@@ -274,19 +280,14 @@ CELERY_TASK_REJECT_ON_WORKER_LOST = True
 CELERY_TASK_TIME_LIMIT = 300
 
 # 🔴 Critical for Heroku Redis (TLS)
-CELERY_BROKER_USE_SSL = {
-    "ssl_cert_reqs": ssl.CERT_NONE
-}
+CELERY_BROKER_USE_SSL = {"ssl_cert_reqs": ssl.CERT_NONE}
 
-CELERY_REDIS_BACKEND_USE_SSL = {
-    "ssl_cert_reqs": ssl.CERT_NONE
-}
+CELERY_REDIS_BACKEND_USE_SSL = {"ssl_cert_reqs": ssl.CERT_NONE}
 
 
 # -------------------
 # Django Cache (Redis)
 # -------------------
-
 
 
 # =============================================================================

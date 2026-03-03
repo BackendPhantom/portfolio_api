@@ -4,8 +4,8 @@ Production settings — PostgreSQL, strict security, real email.
 
 import os
 
-from .base import *
 from decouple import Csv, config  # noqa: F401, F403
+from .base import *
 
 DEBUG = True
 ALLOWED_HOSTS = os.environ.get("ALLOWED_HOSTS", "").split(",")
@@ -16,9 +16,7 @@ SECRET_KEY = os.environ["SECRET_KEY"]
 
 import dj_database_url
 
-DATABASES = {
-    "default": dj_database_url.config(conn_max_age=600)
-}
+DATABASES = {"default": dj_database_url.config(conn_max_age=600)}
 # PostgreSQL
 # DATABASES = {
 #     "default": {

@@ -10,12 +10,10 @@ from allauth.socialaccount.providers.oauth2.client import OAuth2Client
 from dj_rest_auth.registration.views import SocialLoginView
 from django.conf import settings
 from django.contrib.auth import get_user_model
-from django.contrib.auth.tokens import default_token_generator
 from django.core.cache import cache
+from django.core.signing import BadSignature, SignatureExpired, dumps, loads
 from django.http import HttpResponseRedirect
 from django.utils import timezone
-from django.utils.encoding import force_bytes, force_str
-from django.utils.http import urlsafe_base64_decode, urlsafe_base64_encode
 from drf_spectacular.utils import (
     OpenApiParameter,
     OpenApiResponse,
@@ -116,12 +114,13 @@ class SignupViewset(GenericAPIView):
         user.is_active = False
         user.save()
 
-        # Generate verification token
-        token = default_token_generator.make_token(user)
-        uid = urlsafe_base64_encode(force_bytes(user.pk))
+        # Generate time-limited signed token (contains user id, expires per settings)
+        signed_token = dumps({"user_id": str(user.pk)}, salt="email-verify")
 
         # Build verification URL (frontend should handle this route)
-        verify_url = f"{settings.FRONTEND_URL}/verify-email?uid={uid}&token={token}"
+        verify_url = (
+            f"{settings.FRONTEND_URL}/verify-email/confirm?token={signed_token}"
+        )
 
         # Send verification email
         send_verification_email.delay(user.email, verify_url)
@@ -176,6 +175,7 @@ class LoginView(APIView):
     throttle_classes = [LoginRateThrottle]
 
     def post(self, request):
+        """Authenticate a user with email and password, returning JWT tokens on success."""
         email = request.data.get("email", "").lower().strip()
         password = request.data.get("password", "")
 
@@ -239,6 +239,11 @@ class LogoutView(APIView):
     permission_classes = [IsAuthenticated]
 
     def post(self, request):
+        """
+        Log out the current user by bumping their token version and
+        clearing the stored refresh JTI.  Optionally blacklists the
+        refresh token if supplied in the request body.
+        """
         user = request.user
         user.token_version += 1
         user.refresh_jti = ""  # Invalidate the current refresh token
@@ -441,7 +446,22 @@ class VersionedTokenRefreshView(APIView):
 )
 class UserProfileViewset(viewsets.ModelViewSet):
     """
-    Viewset for retrieving and updating user profiles.
+    Full lifecycle management for user profiles.
+
+    Standard ModelViewSet CRUD endpoints are available for admin-like
+    access (retrieve, update, partial_update, destroy) and are guarded
+    by the ``IsSelf`` permission so that only the profile owner can
+    mutate their own data.
+
+    Custom actions expose dedicated workflows:
+    - ``me``                    – shortcut to fetch the authenticated user's own profile
+    - ``update_profile``        – PATCH/PUT the authenticated user's profile
+    - ``change_password``       – password rotation (requires current password)
+    - ``public_profile``        – read-only public view (respects privacy flag)
+    - ``verify_email``          – email verification via signed token
+    - ``verify_email_request``  – request a new verification email
+    - ``request_password_reset``– initiate password reset flow
+    - ``confirm_password_reset``– complete password reset with signed token
     """
 
     queryset = User.objects.all()
@@ -452,6 +472,7 @@ class UserProfileViewset(viewsets.ModelViewSet):
     #     return self.request.user
 
     def get_serializer_class(self):
+        """Return the appropriate serializer based on the current action."""
         if self.action == "change_password":
             return ChangePasswordSerializer
         elif self.action == "public_profile":
@@ -465,9 +486,11 @@ class UserProfileViewset(viewsets.ModelViewSet):
         return UserProfileSerializer
 
     def list(self, request, *args, **kwargs):
+        """Disabled — user listing is not exposed."""
         raise MethodNotAllowed(request.method)
 
     def create(self, request, *args, **kwargs):
+        """Disabled — use the dedicated /auth/signup/ endpoint."""
         raise MethodNotAllowed(request.method)
 
     @extend_schema(
@@ -514,6 +537,7 @@ class UserProfileViewset(viewsets.ModelViewSet):
         return Response(serializer.data)
 
     def retrieve(self, request, *args, **kwargs):
+        """Retrieve a user profile by primary key. Restricted to the profile owner."""
         try:
             user = self.get_object()
         except User.DoesNotExist:
@@ -523,6 +547,7 @@ class UserProfileViewset(viewsets.ModelViewSet):
         return Response(serializer.data)
 
     def update(self, request, *args, **kwargs):
+        """Full or partial update of a user profile. Restricted to the profile owner."""
         try:
             user = self.get_object()
         except User.DoesNotExist:
@@ -535,6 +560,7 @@ class UserProfileViewset(viewsets.ModelViewSet):
         return Response(serializer.data)
 
     def destroy(self, request, *args, **kwargs):
+        """Soft-delete (deactivate) a user account. Requires password confirmation."""
         try:
             user = self.get_object()
         except User.DoesNotExist:
@@ -682,14 +708,11 @@ class UserProfileViewset(viewsets.ModelViewSet):
 
         try:
             user = User.objects.get(email__iexact=email, is_active=True)
-            # Generate token and uid
-            token = default_token_generator.make_token(user)
-            uid = urlsafe_base64_encode(force_bytes(user.pk))
+            # Generate time-limited signed token
+            signed_token = dumps({"user_id": str(user.pk)}, salt="password-reset")
 
             # Build reset URL (frontend should handle this route)
-            reset_url = (
-                f"{settings.FRONTEND_URL}/reset-password?uid={uid}&token={token}"
-            )
+            reset_url = f"{settings.FRONTEND_URL}/reset-password?token={signed_token}"
 
             # Send email
             send_password_reset_email.delay(user.email, reset_url)
@@ -729,12 +752,11 @@ class UserProfileViewset(viewsets.ModelViewSet):
     )
     def confirm_password_reset(self, request):
         """
-        Confirm password reset with token.
+        Confirm password reset with signed token.
 
         POST /api/v1/users/password-reset/confirm/
         {
-            "uid": "MjE",
-            "token": "abc123-def456",
+            "token": "<signed-token>",
             "new_password": "NewSecurePass123!",
             "new_password_confirm": "NewSecurePass123!"
         }
@@ -742,21 +764,22 @@ class UserProfileViewset(viewsets.ModelViewSet):
         serializer = self.get_serializer(data=request.data)
         serializer.is_valid(raise_exception=True)
 
+        # Verify time-limited signed token
         try:
-            uid = force_str(urlsafe_base64_decode(serializer.validated_data["uid"]))
-            user = User.objects.get(pk=uid)
-        except (TypeError, ValueError, OverflowError, User.DoesNotExist):
+            payload = loads(
+                serializer.validated_data["token"],
+                max_age=getattr(settings, "PASSWORD_RESET_TOKEN_MAX_AGE", 24 * 3600),
+                salt="password-reset",
+            )
+            user = User.objects.get(pk=payload["user_id"])
+        except SignatureExpired:
             return Response(
-                {"error": "Invalid reset link."},
+                {"error": "Reset link has expired."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
-
-        # Verify token
-        if not default_token_generator.check_token(
-            user, serializer.validated_data["token"]
-        ):
+        except (BadSignature, KeyError, User.DoesNotExist):
             return Response(
-                {"error": "Invalid or expired reset link."},
+                {"error": "Invalid reset link."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
@@ -771,13 +794,41 @@ class UserProfileViewset(viewsets.ModelViewSet):
             status=status.HTTP_200_OK,
         )
 
-    
-    @action(detail=False, methods=["POST"], permission_classes=[AllowAny], url_path="verify-email/request")
-    def verify_email_request(self,request):
+    @extend_schema(
+        tags=["Authentication"],
+        summary="Request New Verification Email",
+        description=(
+            "Request a new email verification link. If an inactive account "
+            "with the given email exists, a fresh verification email is sent. "
+            "Always returns a success-like message to prevent email enumeration."
+        ),
+        request=inline_serializer(
+            name="VerifyEmailResendRequest",
+            fields={
+                "email": drf_serializers.EmailField(
+                    help_text="Email address of the unverified account"
+                ),
+            },
+        ),
+        responses={
+            200: inline_serializer(
+                name="VerifyEmailResendResponse",
+                fields={"message": drf_serializers.CharField()},
+            ),
+            400: OpenApiResponse(description="Email parameter is required"),
+        },
+    )
+    @action(
+        detail=False,
+        methods=["POST"],
+        permission_classes=[AllowAny],
+        url_path="verify-email/request",
+    )
+    def verify_email_request(self, request):
         """
         Endpoint to request a new verification email. Accepts an email address and, if a matching inactive user is found, sends a new verification email.
 
-        POST api/v1/users/verify-email/request/?email=user@example.com 
+        POST api/v1/users/verify-email/request/?email=user@example.com
         """
         email = request.data.get("email", "").lower().strip()
         if not email:
@@ -796,12 +847,13 @@ class UserProfileViewset(viewsets.ModelViewSet):
                 status=status.HTTP_200_OK,
             )
 
-        # Generate verification token
-        token = default_token_generator.make_token(user)
-        uid = urlsafe_base64_encode(force_bytes(user.pk))
+        # Generate time-limited signed token
+        signed_token = dumps({"user_id": str(user.pk)}, salt="email-verify")
 
         # Build verification URL (frontend should handle this route)
-        verify_url = f"{settings.FRONTEND_URL}/verify-email?uid={uid}&token={token}"
+        verify_url = (
+            f"{settings.FRONTEND_URL}/verify-email/confirm?token={signed_token}"
+        )
 
         # Send verification email
         send_verification_email.delay(user.email, verify_url)
@@ -813,7 +865,6 @@ class UserProfileViewset(viewsets.ModelViewSet):
             status=status.HTTP_200_OK,
         )
 
-    
     @extend_schema(
         tags=["Authentication"],
         summary="Verify Email",
@@ -821,9 +872,8 @@ class UserProfileViewset(viewsets.ModelViewSet):
         request=inline_serializer(
             name="VerifyEmailRequest",
             fields={
-                "uid": drf_serializers.CharField(help_text="Base64-encoded user ID"),
                 "token": drf_serializers.CharField(
-                    help_text="Email verification token"
+                    help_text="Signed email verification token"
                 ),
             },
         ),
@@ -848,29 +898,39 @@ class UserProfileViewset(viewsets.ModelViewSet):
     )
     def verify_email(self, request):
         """
-        Verify user email with token.
+        Verify user email with signed token.
 
         POST /api/v1/users/verify-email/
         {
-            "uid": "MjE",
-            "token": "abc123-def456"
+            "token": "<signed-token>"
         }
 
         Returns JWT tokens on successful verification for immediate login.
         """
-        uid = request.data.get("uid")
         token = request.data.get("token")
 
-        if not uid or not token:
+        if not token:
             return Response(
-                {"error": "Missing uid or token."},
+                {"error": "Missing token."},
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
+        # Verify time-limited signed token
         try:
-            user_id = force_str(urlsafe_base64_decode(uid))
-            user = User.objects.get(pk=user_id)
-        except (TypeError, ValueError, OverflowError, User.DoesNotExist):
+            payload = loads(
+                token,
+                max_age=getattr(
+                    settings, "EMAIL_VERIFICATION_TOKEN_MAX_AGE", 24 * 3600
+                ),
+                salt="email-verify",
+            )
+            user = User.objects.get(pk=payload["user_id"])
+        except SignatureExpired:
+            return Response(
+                {"error": "Verification link has expired."},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+        except (BadSignature, KeyError, User.DoesNotExist):
             return Response(
                 {"error": "Invalid verification link."},
                 status=status.HTTP_400_BAD_REQUEST,
@@ -880,12 +940,6 @@ class UserProfileViewset(viewsets.ModelViewSet):
             return Response(
                 {"message": "Email already verified."},
                 status=status.HTTP_200_OK,
-            )
-
-        if not default_token_generator.check_token(user, token):
-            return Response(
-                {"error": "Invalid or expired verification link."},
-                status=status.HTTP_400_BAD_REQUEST,
             )
 
         # Activate user and mark email as verified
@@ -957,6 +1011,30 @@ class _VersionedSocialLoginView(SocialLoginView):
         return Response(response_data, status=status.HTTP_200_OK)
 
 
+@extend_schema(
+    tags=["Social Authentication"],
+    summary="Google OAuth Login",
+    description="Authenticate via Google OAuth using an authorization code. Returns JWT tokens on success.",
+    request=inline_serializer(
+        name="GoogleLoginRequest",
+        fields={
+            "code": drf_serializers.CharField(
+                help_text="Authorization code from Google OAuth"
+            ),
+        },
+    ),
+    responses={
+        200: inline_serializer(
+            name="GoogleLoginSuccessResponse",
+            fields={
+                "access": drf_serializers.CharField(help_text="JWT access token"),
+                "refresh": drf_serializers.CharField(help_text="JWT refresh token"),
+                "user": AuthUserSerializer(),
+            },
+        ),
+        400: OpenApiResponse(description="Invalid authorization code"),
+    },
+)
 class GoogleLogin(_VersionedSocialLoginView):
     """
     Google OAuth Login - Accepts either:
@@ -1206,7 +1284,9 @@ def create_api_key(request):
 
         if expires_in_days > APIKey.MAX_EXPIRY_DAYS:
             return Response(
-                {"error": f"Expiration period cannot exceed {APIKey.MAX_EXPIRY_DAYS} days."},
+                {
+                    "error": f"Expiration period cannot exceed {APIKey.MAX_EXPIRY_DAYS} days."
+                },
                 status=status.HTTP_400_BAD_REQUEST,
             )
 
@@ -1463,6 +1543,7 @@ def _social_auth_redirect_response(token_data):
 
 
 def _social_auth_error_response(message):
+    """Redirect to the frontend OAuth callback page with an error message in query params."""
     frontend_url = getattr(settings, "FRONTEND_URL", "http://localhost:5173")
     params = urlencode({"error": message})
     return HttpResponseRedirect(f"{frontend_url}/oauth/callback?{params}")
@@ -1479,6 +1560,13 @@ class ExchangeTokenView(APIView):
     throttle_scope = "social_exchange"  # Applies the '5/m' rate limit
 
     def post(self, request):
+        """
+        Accept a short-lived UUID authorization code (issued during the
+        OAuth callback redirect) and return the cached JWT token payload.
+
+        The code is single-use: it is deleted from the cache immediately
+        after a successful exchange.
+        """
         code = request.data.get("code")
         print(code)
 
@@ -1520,6 +1608,7 @@ class ExchangeTokenView(APIView):
         return Response(token_data, status=status.HTTP_200_OK)
 
     def _get_client_ip(self, request):
+        """Extract the client IP from X-Forwarded-For or REMOTE_ADDR."""
         x_forwarded_for = request.META.get("HTTP_X_FORWARDED_FOR")
         if x_forwarded_for:
             ip = x_forwarded_for.split(",")[0]

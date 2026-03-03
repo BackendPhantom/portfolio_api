@@ -1,14 +1,10 @@
 import re
 
+from allauth.socialaccount.models import SocialAccount
 from django.contrib.auth import get_user_model
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import transaction
-from rest_framework import serializers
-from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
-from allauth.socialaccount.models import SocialAccount
-
-from .tokens import VersionedRefreshToken
 from phonenumber_field.serializerfields import (
     PhoneNumberField as SerializerPhoneNumberField,
 )
@@ -16,6 +12,10 @@ from phonenumber_field.validators import (
     validate_international_phonenumber,
     validate_phonenumber,
 )
+from rest_framework import serializers
+from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
+
+from .tokens import VersionedRefreshToken
 
 User = get_user_model()
 
@@ -374,10 +374,9 @@ class PasswordResetRequestSerializer(serializers.Serializer):
 
 
 class PasswordResetConfirmSerializer(serializers.Serializer):
-    """Serializer for confirming password reset with token."""
+    """Serializer for confirming password reset with signed token."""
 
     token = serializers.CharField(write_only=True)
-    uid = serializers.CharField(write_only=True)
     new_password = serializers.CharField(
         write_only=True, min_length=8, style={"input_type": "password"}
     )
