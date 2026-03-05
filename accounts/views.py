@@ -43,8 +43,8 @@ from .serializers import (
     UserProfileSerializer,
     UserRegistrationSerializer,
 )
-from .tasks import send_password_reset_email, send_verification_email
-from .throttles import (
+from core.tasks import send_password_reset_email, send_verification_email
+from commons.throttles import (
     LoginRateThrottle,
     PasswordResetRateThrottle,
     SignupRateThrottle,

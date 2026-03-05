@@ -38,6 +38,7 @@ INSTALLED_APPS = [
     "accounts",
     "projects",
     "skills",
+    "messages",
     # Django
     "django.contrib.admin",
     "django.contrib.auth",
@@ -176,6 +177,7 @@ REST_FRAMEWORK = {
         "signup": "3/min",
         "password_reset": "3/min",
         "social_exchange": "5/min",
+        "contact": "3/hour",
     },
 }
 
@@ -266,7 +268,7 @@ SOCIALACCOUNT_ADAPTER = "accounts.adapters.CustomSocialAccountAdapter"
 # =============================================================================
 # CELERY (Async Tasks)
 # =============================================================================
-REDIS_URL=os.environ.get("REDIS_URL")
+REDIS_URL = os.environ.get("REDIS_URL")
 CELERY_BROKER_URL = REDIS_URL
 CELERY_RESULT_BACKEND = REDIS_URL
 

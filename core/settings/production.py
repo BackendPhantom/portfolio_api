@@ -62,4 +62,8 @@ CORS_ALLOWED_ORIGIN_REGEXES = [
 
 DEFAULT_FROM_EMAIL = EMAIL_HOST_USER
 
+# The inbox where contact-form messages are delivered.
+# Set this env var to your personal email address in production.
+CONTACT_INBOX_EMAIL = os.environ.get("CONTACT_INBOX_EMAIL", EMAIL_HOST_USER)
+
 # erkp xuwg avtu gbgn

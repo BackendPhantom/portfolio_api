@@ -42,6 +42,7 @@ api_v1_patterns = [
     path("", include("accounts.urls")),  # auth/ and users/
     path("projects/", include("projects.urls")),
     path("skills/", include("skills.urls")),
+    path("contact/", include("messages.urls")),
     path("export/", DataExportView.as_view(), name="data-export"),
     path("activity/", RecentActivityView.as_view(), name="recent-activity"),
     path("stats/", StatsView.as_view(), name="stats"),
