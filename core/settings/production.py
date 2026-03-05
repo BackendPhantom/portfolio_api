@@ -7,7 +7,7 @@ import os
 from decouple import Csv, config  # noqa: F401, F403
 from .base import *
 
-DEBUG = True
+DEBUG = False
 ALLOWED_HOSTS = os.environ.get("ALLOWED_HOSTS", "").split(",")
 
 # Override SECRET_KEY from env for extra safety
