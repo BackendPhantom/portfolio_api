@@ -38,7 +38,7 @@ INSTALLED_APPS = [
     "accounts",
     "projects",
     "skills",
-    "messages",
+    "contact_message",
     # Django
     "django.contrib.admin",
     "django.contrib.auth",
